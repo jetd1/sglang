@@ -28,9 +28,11 @@ from sglang.srt.mem_cache.base_prefix_cache import (
 from sglang.srt.mem_cache.hybrid_cache import (
     BASE_COMPONENT_NAME,
     ComponentData,
+    ComponentName,
     FullComponent,
     MambaComponent,
     SWAComponent,
+    TreeComponent,
     get_last_access_time,
 )
 from sglang.srt.mem_cache.memory_pool import HybridReqToTokenPool
@@ -181,10 +183,10 @@ class HybridLRUList:
         return self.get_prev_leaf_no_lock(self.tail, check_id=False)
 
 
-COMPONENT_REGISTRY = {
-    BASE_COMPONENT_NAME: FullComponent,
-    "mamba": MambaComponent,
-    "swa": SWAComponent,
+COMPONENT_REGISTRY: dict[ComponentName, type[TreeComponent]] = {
+    ComponentName.FULL: FullComponent,
+    ComponentName.MAMBA: MambaComponent,
+    ComponentName.SWA: SWAComponent,
 }
 
 logger = logging.getLogger(__name__)
@@ -221,7 +223,7 @@ class HybridRadixCache(BasePrefixCache):
 
         self.component_names = [BASE_COMPONENT_NAME, *component_names]
         self.component_order = list(component_names)
-        self.components = {
+        self.components: dict[str, TreeComponent] = {
             name: COMPONENT_REGISTRY[name](self) for name in self.component_names
         }
         if self.is_eagle:
@@ -301,8 +303,8 @@ class HybridRadixCache(BasePrefixCache):
         self.update_eviction_metrics(sum(tracker.values()), start_time)
         return EvictResult(
             num_tokens_evicted=tracker[BASE_COMPONENT_NAME],
-            swa_num_tokens_evicted=tracker.get("swa", 0),
-            mamba_num_evicted=tracker.get("mamba", 0),
+            swa_num_tokens_evicted=tracker.get(ComponentName.SWA, 0),
+            mamba_num_evicted=tracker.get(ComponentName.MAMBA, 0),
         )
 
     def inc_lock_ref(self, node: HybridTreeNode) -> IncLockRefResult:
@@ -549,7 +551,7 @@ class HybridRadixCache(BasePrefixCache):
             for comp in self.components.values():
                 if not comp.node_has_component_data(parent):
                     continue
-                if comp.name != BASE_COMPONENT_NAME:
+                if not comp.name.is_full:
                     can_delete = False
                     break
                 if parent.component(comp.name).lock_ref > 0:
@@ -572,10 +574,10 @@ class HybridRadixCache(BasePrefixCache):
         return self.req_to_token_pool.mamba_pool
 
     def supports_swa(self) -> bool:
-        return "swa" in self.components
+        return ComponentName.SWA in self.components
 
     def supports_mamba(self) -> bool:
-        return "mamba" in self.components
+        return ComponentName.MAMBA in self.components
 
     def full_evictable_size(self) -> int:
         return self.component_evictable_size_.get(BASE_COMPONENT_NAME, 0)
@@ -584,16 +586,16 @@ class HybridRadixCache(BasePrefixCache):
         return self.component_protected_size_.get(BASE_COMPONENT_NAME, 0)
 
     def swa_evictable_size(self) -> int:
-        return self.component_evictable_size_.get("swa", 0)
+        return self.component_evictable_size_.get(ComponentName.SWA, 0)
 
     def mamba_evictable_size(self) -> int:
-        return self.component_evictable_size_.get("mamba", 0)
+        return self.component_evictable_size_.get(ComponentName.MAMBA, 0)
 
     def swa_protected_size(self) -> int:
-        return self.component_protected_size_.get("swa", 0)
+        return self.component_protected_size_.get(ComponentName.SWA, 0)
 
     def mamba_protected_size(self) -> int:
-        return self.component_protected_size_.get("mamba", 0)
+        return self.component_protected_size_.get(ComponentName.MAMBA, 0)
 
     def total_size(self):
         total_size = 0
@@ -642,10 +644,10 @@ class HybridRadixCache(BasePrefixCache):
         return torch.tensor([], dtype=torch.int64, device=self.device)
 
     def all_mamba_values_flatten(self) -> torch.Tensor:
-        return self._all_component_values_flatten("mamba")
+        return self._all_component_values_flatten(ComponentName.MAMBA)
 
     def all_swa_values_flatten(self) -> torch.Tensor:
-        return self._all_component_values_flatten("swa")
+        return self._all_component_values_flatten(ComponentName.SWA)
 
     def available_and_evictable_str(self) -> str:
         if self.supports_swa():
@@ -658,9 +660,9 @@ class HybridRadixCache(BasePrefixCache):
             f"(full_available_size={full_available_size} + full_evictable_size_={full_evictable})"
         ]
         for component_name in self.component_order:
-            if component_name == "swa":
+            if component_name.is_swa:
                 available_size = self.token_to_kv_pool_allocator.swa_available_size()
-            elif component_name == "mamba":
+            elif component_name.is_mamba:
                 available_size = self.cache_req_mamba_pool.available_size()
             else:
                 available_size = 0
@@ -704,7 +706,7 @@ class HybridMambaRadixCache(HybridRadixCache):
             assert params.page_size == 1
         super().__init__(
             params,
-            component_names=("mamba",),
+            component_names=(ComponentName.MAMBA,),
         )
 
     def cache_finished_req(self, req: Req, is_insert: bool = True) -> None:
@@ -872,19 +874,19 @@ class HybridSWARadixCache(HybridRadixCache):
 
 def create_hybrid_radix_cache(
     params: CacheInitParams,
-    component_names: Optional[tuple[str, ...]] = None,
+    component_names: Optional[tuple[ComponentName, ...]] = None,
 ) -> HybridRadixCache:
     if component_names is None:
         component_names = tuple(getattr(params, "hybrid_tree_components", ()) or ())
     if not component_names:
         if isinstance(params.token_to_kv_pool_allocator, SWATokenToKVPoolAllocator):
-            component_names = ("swa",)
+            component_names = (ComponentName.SWA,)
         elif isinstance(params.req_to_token_pool, HybridReqToTokenPool):
-            component_names = ("mamba",)
+            component_names = (ComponentName.MAMBA,)
         else:
             raise ValueError("Can not infer hybrid tree components from params.")
-    if component_names == ("mamba",):
+    if component_names == (ComponentName.MAMBA,):
         return HybridMambaRadixCache(params)
-    if component_names == ("swa",):
+    if component_names == (ComponentName.SWA,):
         return HybridSWARadixCache(params)
     return HybridRadixCache(params, component_names=component_names)

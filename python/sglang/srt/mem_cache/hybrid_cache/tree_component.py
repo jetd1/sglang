@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import torch
@@ -24,7 +25,25 @@ if TYPE_CHECKING:
     )
 
 
-BASE_COMPONENT_NAME = "full"
+class ComponentName(str, Enum):
+    FULL = "full"
+    SWA = "swa"
+    MAMBA = "mamba"
+
+    @property
+    def is_full(self) -> bool:
+        return self == ComponentName.FULL
+
+    @property
+    def is_swa(self) -> bool:
+        return self == ComponentName.SWA
+
+    @property
+    def is_mamba(self) -> bool:
+        return self == ComponentName.MAMBA
+
+
+BASE_COMPONENT_NAME = ComponentName.FULL
 
 _LAST_ACCESS_TIME_COUNTER_FLOAT = float64(1.0)
 _COMPONENT_UUID_COUNTER = 1
@@ -63,8 +82,8 @@ class TreeComponent(ABC):
 
     @property
     @abstractmethod
-    def name(self) -> str:
-        """Component identifier, e.g. "full", "swa", "mamba"."""
+    def name(self) -> ComponentName:
+        """Component identifier — one of the ``ComponentName`` enum values."""
         ...
 
     @abstractmethod

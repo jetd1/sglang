@@ -12,6 +12,7 @@ from sglang.srt.mem_cache.base_prefix_cache import (
     InsertResult,
 )
 from sglang.srt.mem_cache.hybrid_cache.tree_component import (
+    ComponentName,
     TreeComponent,
     gen_component_uuid,
 )
@@ -31,8 +32,8 @@ class SWAComponent(TreeComponent):
     """
 
     @property
-    def name(self) -> str:
-        return "swa"
+    def name(self) -> ComponentName:
+        return ComponentName.SWA
 
     def _translate_full_to_swa(self, full_indices: torch.Tensor) -> torch.Tensor:
         return self.cache.token_to_kv_pool_allocator.translate_loc_from_full_to_swa(

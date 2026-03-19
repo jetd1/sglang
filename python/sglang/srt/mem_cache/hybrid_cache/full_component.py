@@ -8,7 +8,7 @@ from sglang.srt.mem_cache.base_prefix_cache import (
     IncLockRefResult,
 )
 from sglang.srt.mem_cache.hybrid_cache.tree_component import (
-    BASE_COMPONENT_NAME,
+    ComponentName,
     TreeComponent,
 )
 
@@ -18,8 +18,8 @@ if TYPE_CHECKING:
 
 class FullComponent(TreeComponent):
     @property
-    def name(self) -> str:
-        return BASE_COMPONENT_NAME
+    def name(self) -> ComponentName:
+        return ComponentName.FULL
 
     def create_match_validator(self) -> Callable[[HybridTreeNode], bool]:
         return lambda node: True

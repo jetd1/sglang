@@ -4,6 +4,7 @@ from sglang.srt.mem_cache.hybrid_cache.swa_component import SWAComponent
 from sglang.srt.mem_cache.hybrid_cache.tree_component import (
     BASE_COMPONENT_NAME,
     ComponentData,
+    ComponentName,
     TreeComponent,
     gen_component_uuid,
     get_last_access_time,
@@ -12,6 +13,7 @@ from sglang.srt.mem_cache.hybrid_cache.tree_component import (
 __all__ = [
     "BASE_COMPONENT_NAME",
     "ComponentData",
+    "ComponentName",
     "FullComponent",
     "MambaComponent",
     "SWAComponent",

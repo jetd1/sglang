@@ -14,6 +14,7 @@ from sglang.srt.mem_cache.base_prefix_cache import (
     MatchResult,
 )
 from sglang.srt.mem_cache.hybrid_cache.tree_component import (
+    ComponentName,
     TreeComponent,
     get_last_access_time,
 )
@@ -25,8 +26,8 @@ if TYPE_CHECKING:
 
 class MambaComponent(TreeComponent):
     @property
-    def name(self) -> str:
-        return "mamba"
+    def name(self) -> ComponentName:
+        return ComponentName.MAMBA
 
     def create_match_validator(self) -> Callable[[HybridTreeNode], bool]:
         name = self.name
