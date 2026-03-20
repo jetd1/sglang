@@ -124,8 +124,10 @@ jobs:
               - "sgl-kernel/**"
             jit_kernel:
               - "python/sglang/jit_kernel/**"
+              - "test/registered/kernels/test_jit_kernel_ci.py"
               - "python/pyproject.toml"
               - ".github/workflows/pr-test.yml"
+              - ".github/workflows/nightly-test-nvidia.yml"
             multimodal_gen:
               - "python/sglang/multimodal_gen/**"
               - "python/sglang/jit_kernel/**"
@@ -182,7 +184,7 @@ jobs:
           fi
 
           # Check for jit_kernel changes
-          if echo "$CHANGED_FILES" | grep -qE "^(python/sglang/jit_kernel/|python/pyproject\.toml|\.github/workflows/pr-test\.yml)"; then
+          if echo "$CHANGED_FILES" | grep -qE "^(python/sglang/jit_kernel/|test/registered/kernels/test_jit_kernel_ci\.py|python/pyproject\.toml|\.github/workflows/pr-test\.yml|\.github/workflows/nightly-test-nvidia\.yml)"; then
             echo "jit_kernel=true" >> $GITHUB_OUTPUT
             echo "Detected jit_kernel changes"
           else
@@ -691,14 +693,19 @@ jobs:
 
   # =============================================== jit-kernel ====================================================
 
-  jit-kernel-unit-test:
+  stage-b-kernel:
     needs: [check-changes, call-gate]
-    # Skip for scheduled runs and when target_stage is set
     if: |
-      github.event_name != 'schedule' &&
-      inputs.test_parallel_dispatch != true &&
-      !inputs.target_stage &&
-      needs.check-changes.outputs.jit_kernel == 'true'
+      always() &&
+      (
+        (inputs.target_stage == 'stage-b-kernel') ||
+        (
+          github.event_name != 'schedule' &&
+          inputs.test_parallel_dispatch != true &&
+          !inputs.target_stage &&
+          needs.check-changes.outputs.jit_kernel == 'true'
+        )
+      )
     runs-on: 1-gpu-runner
     timeout-minutes: 240
     env:
@@ -716,34 +723,12 @@ jobs:
       - name: Run test
         timeout-minutes: 30
         run: |
-          cd python/sglang/jit_kernel
-          pytest tests/
-
-  jit-kernel-unit-test-nightly:
-    needs: [check-changes]
-    if: |
-      github.event_name == 'schedule' &&
-      needs.check-changes.outputs.jit_kernel == 'true'
-    runs-on: 1-gpu-runner
-    timeout-minutes: 240
-    env:
-      RUNNER_LABELS: 1-gpu-runner
-      SGLANG_JIT_KERNEL_RUN_FULL_TESTS: "1"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.pr_head_sha || inputs.ref || github.sha }}
-
-      - name: Install dependencies
-        timeout-minutes: 20
-        run: |
-          bash scripts/ci/cuda/ci_install_dependency.sh
-
-      - name: Run full nightly test
-        timeout-minutes: 60
-        run: |
-          cd python/sglang/jit_kernel
-          pytest tests/
+          cd test/
+          CONTINUE_ON_ERROR_FLAG=""
+          if [[ "${{ needs.check-changes.outputs.continue_on_error }}" == "true" ]]; then
+            CONTINUE_ON_ERROR_FLAG="--continue-on-error"
+          fi
+          python3 run_suite.py --hw cuda --suite stage-b-kernel --timeout-per-file 2400 $CONTINUE_ON_ERROR_FLAG
 
   jit-kernel-benchmark-test:
     needs: [check-changes, call-gate]
@@ -1694,8 +1679,7 @@ jobs:
         wait-for-stage-a,
         wait-for-stage-b,
 
-        jit-kernel-unit-test,
-        jit-kernel-unit-test-nightly,
+        stage-b-kernel,
         jit-kernel-benchmark-test,
 
         multimodal-gen-unit-test,

@@ -255,6 +255,7 @@ def handle_rerun_stage(
     nvidia_stages = [
         "stage-a-test-1",
         "stage-a-cpu-only",
+        "stage-b-kernel",
         "stage-b-test-small-1-gpu",
         "stage-b-test-large-1-gpu",
         "stage-b-test-large-2-gpu",
@@ -412,6 +413,7 @@ def handle_rerun_stage(
 CUDA_SUITE_TO_RUNNER = {
     "stage-a-test-1": "1-gpu-runner",
     "stage-a-cpu-only": "ubuntu-latest",
+    "stage-b-kernel": "1-gpu-runner",
     "stage-b-test-small-1-gpu": "1-gpu-5090",
     "stage-b-test-large-1-gpu": "1-gpu-runner",
     "stage-b-test-large-2-gpu": "2-gpu-runner",

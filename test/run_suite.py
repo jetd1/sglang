@@ -36,6 +36,7 @@ PER_COMMIT_SUITES = {
     ],
     HWBackend.CUDA: [
         "stage-a-test-1",
+        "stage-b-kernel",
         "stage-b-test-small-1-gpu",
         "stage-b-test-large-1-gpu",
         "stage-b-test-large-2-gpu",
@@ -60,6 +61,7 @@ PER_COMMIT_SUITES = {
 # Nightly test suites (run nightly, organized by GPU configuration)
 NIGHTLY_SUITES = {
     HWBackend.CUDA: [
+        "stage-b-kernel",
         "nightly-1-gpu",
         "nightly-2-gpu",
         "nightly-4-gpu",
