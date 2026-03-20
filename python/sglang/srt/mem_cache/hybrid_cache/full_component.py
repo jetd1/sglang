@@ -21,6 +21,10 @@ class FullComponent(TreeComponent):
     def name(self) -> ComponentName:
         return ComponentName.FULL
 
+    def node_has_component_data(self, node: HybridTreeNode) -> bool:
+        # Override so _for_each_component_lru includes Full in LRU operations
+        return node.full_value is not None
+
     def create_match_validator(self) -> Callable[[HybridTreeNode], bool]:
         return lambda node: True
 
