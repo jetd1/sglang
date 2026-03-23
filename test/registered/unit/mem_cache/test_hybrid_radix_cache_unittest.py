@@ -25,7 +25,7 @@ from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool, SWATokenToKVPoolAllo
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.server_args import ServerArgs, set_global_server_args_for_scheduler
 from sglang.srt.utils import get_device
-from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.ci.ci_register import register_cuda_ci
 
 register_cuda_ci(est_time=10, suite="stage-b-test-small-1-gpu")
 
@@ -637,9 +637,7 @@ class TestHybridRadixCacheSWAMamba(unittest.TestCase):
         tree.cache_finished_req(req, is_insert=True)
 
         # Verify the tokens are in the tree
-        m = tree.match_prefix(
-            MatchPrefixParams(key=RadixKey([1, 2, 3, 4, 5, 6, 7]))
-        )
+        m = tree.match_prefix(MatchPrefixParams(key=RadixKey([1, 2, 3, 4, 5, 6, 7])))
         self.assertEqual(len(m.device_indices), 7)
         tree.sanity_check()
 
