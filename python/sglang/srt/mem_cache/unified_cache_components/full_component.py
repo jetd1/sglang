@@ -13,7 +13,7 @@ from sglang.srt.mem_cache.unified_cache_components.tree_component import (
 )
 
 if TYPE_CHECKING:
-    from sglang.srt.mem_cache.unified_cache_components.unified_radix_cache import (
+    from sglang.srt.mem_cache.unified_radix_cache import (
         UnifiedTreeNode,
     )
 

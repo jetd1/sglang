@@ -749,7 +749,7 @@ class Scheduler(
                 )
             elif self.is_hybrid_swa or self.is_hybrid_ssm:
                 if server_args.enable_unified_radix_tree:
-                    from sglang.srt.mem_cache.unified_cache_components.unified_radix_cache import (
+                    from sglang.srt.mem_cache.unified_radix_cache import (
                         create_unified_radix_cache,
                     )
 

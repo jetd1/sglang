@@ -20,7 +20,7 @@ from sglang.srt.mem_cache.base_prefix_cache import (
 
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
-    from sglang.srt.mem_cache.unified_cache_components.unified_radix_cache import (
+    from sglang.srt.mem_cache.unified_radix_cache import (
         UnifiedRadixCache,
         UnifiedTreeNode,
     )

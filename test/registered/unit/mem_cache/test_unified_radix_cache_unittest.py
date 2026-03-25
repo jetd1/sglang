@@ -21,7 +21,7 @@ from sglang.srt.mem_cache.memory_pool import HybridLinearKVPool, HybridReqToToke
 from sglang.srt.mem_cache.radix_cache import RadixKey
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool, SWATokenToKVPoolAllocator
 from sglang.srt.mem_cache.unified_cache_components.tree_component import ComponentName
-from sglang.srt.mem_cache.unified_cache_components.unified_radix_cache import (
+from sglang.srt.mem_cache.unified_radix_cache import (
     UnifiedRadixCache,
 )
 from sglang.srt.sampling.sampling_params import SamplingParams
