@@ -126,8 +126,8 @@ class TestUnifiedRadixCacheMamba(unittest.TestCase):
                 token_to_kv_pool_allocator=allocator,
                 page_size=_PAGE_SIZE,
                 disable=False,
+                component_names=(ComponentName.MAMBA,),
             ),
-            component_names=(ComponentName.MAMBA,),
         )
 
         def make_req():
@@ -482,8 +482,8 @@ class TestUnifiedRadixCacheSWAMamba(unittest.TestCase):
                 page_size=_PAGE_SIZE,
                 disable=False,
                 sliding_window_size=sliding_window_size,
+                component_names=(ComponentName.SWA, ComponentName.MAMBA),
             ),
-            component_names=(ComponentName.SWA, ComponentName.MAMBA),
         )
 
         def make_req():

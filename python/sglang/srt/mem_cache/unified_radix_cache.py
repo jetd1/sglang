@@ -104,12 +104,12 @@ class UnifiedLRUList:
         self.tail.lru_prev[component_name] = self.head
         self.cache: dict[int, UnifiedTreeNode] = {}
 
-    def _add_node_after(self, old_node: UnifiedTreeNode, new_node: UnifiedTreeNode):
+    def _add_node_after(self, prev_node: UnifiedTreeNode, new_node: UnifiedTreeNode):
         component_name = self.component_name
-        new_node.lru_prev[component_name] = old_node
-        new_node.lru_next[component_name] = old_node.lru_next[component_name]
-        old_node.lru_next[component_name].lru_prev[component_name] = new_node
-        old_node.lru_next[component_name] = new_node
+        new_node.lru_prev[component_name] = prev_node
+        new_node.lru_next[component_name] = prev_node.lru_next[component_name]
+        prev_node.lru_next[component_name].lru_prev[component_name] = new_node
+        prev_node.lru_next[component_name] = new_node
 
     def _add_node(self, node: UnifiedTreeNode):
         self._add_node_after(self.head, node)
@@ -196,7 +196,6 @@ class UnifiedRadixCache(BasePrefixCache):
     def __init__(
         self,
         params: CacheInitParams,
-        component_names: tuple[str, ...],
     ):
         self.req_to_token_pool = params.req_to_token_pool
         self.token_to_kv_pool_allocator = params.token_to_kv_pool_allocator
@@ -221,6 +220,8 @@ class UnifiedRadixCache(BasePrefixCache):
             self.key_match_fn = partial(_key_match_paged, page_size=self.page_size)
             self.get_child_key_fn = partial(get_child_key, page_size=self.page_size)
 
+        component_names = params.component_names
+        assert component_names is not None
         self.component_names = [BASE_COMPONENT_NAME, *component_names]
         self.component_order = list(component_names)
         self.components: dict[str, TreeComponent] = {
@@ -839,19 +840,15 @@ class UnifiedMambaRadixCache(UnifiedRadixCache):
         assert isinstance(params.req_to_token_pool, HybridReqToTokenPool)
         if not params.enable_mamba_extra_buffer:
             assert params.page_size == 1
-        super().__init__(
-            params,
-            component_names=(ComponentName.MAMBA,),
-        )
+        params.component_names = (ComponentName.MAMBA,)
+        super().__init__(params)
 
 
 class UnifiedSWARadixCache(UnifiedRadixCache):
     def __init__(self, params: CacheInitParams):
         assert isinstance(params.token_to_kv_pool_allocator, SWATokenToKVPoolAllocator)
-        super().__init__(
-            params,
-            component_names=(ComponentName.SWA,),
-        )
+        params.component_names = (ComponentName.SWA,)
+        super().__init__(params)
 
 
 def create_unified_radix_cache(
@@ -859,7 +856,7 @@ def create_unified_radix_cache(
     component_names: Optional[tuple[ComponentName, ...]] = None,
 ) -> UnifiedRadixCache:
     if component_names is None:
-        component_names = tuple(getattr(params, "unified_tree_components", ()) or ())
+        component_names = params.component_names
     if not component_names:
         if isinstance(params.token_to_kv_pool_allocator, SWATokenToKVPoolAllocator):
             component_names = (ComponentName.SWA,)
@@ -871,4 +868,5 @@ def create_unified_radix_cache(
         return UnifiedMambaRadixCache(params)
     if component_names == (ComponentName.SWA,):
         return UnifiedSWARadixCache(params)
-    return UnifiedRadixCache(params, component_names=component_names)
+    params.component_names = component_names
+    return UnifiedRadixCache(params)
