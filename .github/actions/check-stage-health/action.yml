@@ -38,8 +38,8 @@ runs:
 
           // Debug: print rate limit after API call
           const rl = await github.request('GET /rate_limit');
-          const core = rl.data.resources.core;
-          console.log(`[check-stage-health] core: ${core.used}/${core.limit} used, ${core.remaining} remaining, reset=${core.reset}`);
+          const coreRL = rl.data.resources.core;
+          console.log(`[check-stage-health] core: ${coreRL.used}/${coreRL.limit} used, ${coreRL.remaining} remaining, reset=${coreRL.reset}`);
           // Find jobs that failed from a real error, not from fast-fail cascade
           const rootCauseFailures = jobs.filter(j => {
             if (j.status !== 'completed' || j.conclusion !== 'failure') return false;
