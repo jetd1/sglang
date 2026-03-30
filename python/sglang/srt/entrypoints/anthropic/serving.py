@@ -278,13 +278,24 @@ class AnthropicServing:
             else:
                 thinking_key = "enable_thinking"
 
-            enabled = anthropic_request.thinking.type == "enabled"
+            thinking_type = anthropic_request.thinking.type
+
+            # "adaptive" = model decides whether to think (treat as enabled
+            # since the model's reasoning parser handles depth internally)
+            enabled = thinking_type in ("enabled", "adaptive")
             chat_request.separate_reasoning = enabled
             if enabled:
                 chat_request.stream_reasoning = True
             if chat_request.chat_template_kwargs is None:
                 chat_request.chat_template_kwargs = {}
             chat_request.chat_template_kwargs[thinking_key] = enabled
+
+        # Wire output_config effort (Claude 4.6+ adaptive thinking)
+        # Note: effort is accepted but has no direct mapping to SGLang/GLM-5.
+        # The model will use its default reasoning depth. This ensures Claude
+        # Code requests with output_config don't error out.
+        if anthropic_request.output_config is not None:
+            pass  # Accepted but no-op for now; model controls reasoning depth
 
         # Convert tools
         if anthropic_request.tools:

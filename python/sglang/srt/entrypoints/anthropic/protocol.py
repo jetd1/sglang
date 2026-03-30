@@ -98,10 +98,21 @@ class AnthropicCountTokensResponse(BaseModel):
 
 
 class AnthropicThinkingParam(BaseModel):
-    """Thinking control parameter for Anthropic Messages API"""
+    """Thinking control parameter for Anthropic Messages API.
 
-    type: Literal["enabled", "disabled"]
+    Supports both legacy format and Claude 4.6+ adaptive format:
+    - Legacy: {"type": "enabled"/"disabled", "budget_tokens": N}
+    - Adaptive: {"type": "adaptive"}
+    """
+
+    type: Literal["enabled", "disabled", "adaptive"]
     budget_tokens: Optional[int] = None
+
+
+class AnthropicOutputConfig(BaseModel):
+    """Output configuration for Anthropic Messages API (Claude 4.6+)."""
+
+    effort: Optional[Literal["low", "medium", "high", "max"]] = None
 
 
 class AnthropicMessagesRequest(BaseModel):
@@ -116,6 +127,7 @@ class AnthropicMessagesRequest(BaseModel):
     system: Optional[str | list[AnthropicContentBlock]] = None
     temperature: Optional[float] = None
     thinking: Optional[AnthropicThinkingParam] = None
+    output_config: Optional[AnthropicOutputConfig] = None
     tool_choice: Optional[AnthropicToolChoice] = None
     tools: Optional[list[AnthropicTool]] = None
     top_k: Optional[int] = None
