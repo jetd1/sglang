@@ -96,7 +96,7 @@ class TestGLM5MXFP4PerfMI35x(unittest.TestCase):
                     "131072",
                     "--mem-fraction-static",
                     "0.80",
-                    "--max-model-len",
+                    "--context-length",
                     "4096",
                     "--model-loader-extra-config",
                     '{"enable_multithread_load": true}',
