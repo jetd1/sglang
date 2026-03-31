@@ -49,7 +49,7 @@ class MambaComponent(TreeComponent):
 
     def create_match_validator(self) -> Callable[[UnifiedTreeNode], bool]:
         ct = self.component_type
-        return lambda node: node.component_value(ct) is not None
+        return lambda node: node.component(ct).value is not None
 
     def finalize_match_result(
         self,
@@ -71,7 +71,7 @@ class MambaComponent(TreeComponent):
         else:
             branching_seqlen = None
 
-        mamba_value = last_node.component_value(self.component_type)
+        mamba_value = last_node.component(self.component_type).value
         if cow_mamba and mamba_value is not None:
             assert req is not None
             if req.mamba_pool_idx is None:
@@ -103,14 +103,14 @@ class MambaComponent(TreeComponent):
     ) -> None:
         assert params.mamba_value is not None
         if is_new_leaf:
-            node.set_component_value(self.component_type, params.mamba_value)
+            node.component(self.component_type).value = params.mamba_value
             self.cache.lru_lists[self.component_type].insert_mru(node)
             self.cache.component_evictable_size_[self.component_type] += len(
                 params.mamba_value
             )
             return
-        if node.component_value(self.component_type) is None:
-            node.set_component_value(self.component_type, params.mamba_value)
+        if node.component(self.component_type).value is None:
+            node.component(self.component_type).value = params.mamba_value
             self.cache.lru_lists[self.component_type].insert_mru(node)
             self.cache.component_evictable_size_[self.component_type] += len(
                 params.mamba_value
@@ -124,26 +124,28 @@ class MambaComponent(TreeComponent):
     def redistribute_on_node_split(
         self, new_parent: UnifiedTreeNode, child: UnifiedTreeNode
     ):
-        new_parent.set_component_value(self.component_type, None)
+        new_parent.component(self.component_type).value = None
         new_parent.component(self.component_type).lock_ref = 0
 
     def evict_component(self, node: UnifiedTreeNode, is_leaf: bool) -> int:
-        value = node.component_value(self.component_type)
+        value = node.component(self.component_type).value
         self.cache.req_to_token_pool.mamba_pool.free(value)
         freed = len(value)
         self.cache.component_evictable_size_[self.component_type] -= freed
         if not is_leaf:
-            node.set_component_value(self.component_type, None)
+            node.component(self.component_type).value = None
         return freed
 
-    def drive_eviction(self, params: EvictParams, tracker: dict[ComponentType, int]) -> None:
+    def drive_eviction(
+        self, params: EvictParams, tracker: dict[ComponentType, int]
+    ) -> None:
         request = params.mamba_num
         lru = self.cache.lru_lists[self.component_type]
         x = lru.get_lru_no_lock()
         while (
             tracker[self.component_type] < request and x is not None and lru.in_list(x)
         ):
-            assert x.component_value(self.component_type) is not None
+            assert x.component(self.component_type).value is not None
             if len(x.children) > 0:
                 x_next = lru.get_prev_no_lock(x)
                 self.cache._evict_component_and_detach_lru(
@@ -161,7 +163,7 @@ class MambaComponent(TreeComponent):
     def acquire_component_lock(
         self, node: UnifiedTreeNode, result: IncLockRefResult
     ) -> IncLockRefResult:
-        value = node.component_value(self.component_type)
+        value = node.component(self.component_type).value
         if value is not None:
             if node.component(self.component_type).lock_ref == 0:
                 self.cache.component_evictable_size_[self.component_type] -= len(value)
@@ -172,7 +174,7 @@ class MambaComponent(TreeComponent):
     def release_component_lock(
         self, node: UnifiedTreeNode, params: Optional[DecLockRefParams]
     ) -> None:
-        value = node.component_value(self.component_type)
+        value = node.component(self.component_type).value
         if value is not None:
             assert node.component(self.component_type).lock_ref > 0
             if node.component(self.component_type).lock_ref == 1:
@@ -251,9 +253,7 @@ class MambaComponent(TreeComponent):
                 keep_idx = None
             if mamba_exist:
                 keep_idx = None
-            free_mamba_cache = (
-                True if self.enable_mamba_extra_buffer else mamba_exist
-            )
+            free_mamba_cache = True if self.enable_mamba_extra_buffer else mamba_exist
             if free_mamba_cache:
                 self.cache.req_to_token_pool.free_mamba_cache(
                     req, mamba_ping_pong_track_buffer_to_keep=keep_idx

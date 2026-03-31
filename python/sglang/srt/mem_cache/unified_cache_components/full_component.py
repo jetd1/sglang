@@ -25,7 +25,7 @@ class FullComponent(TreeComponent):
 
     def node_has_component_data(self, node: UnifiedTreeNode) -> bool:
         # Override so _for_each_component_lru includes Full in LRU operations
-        return node.full_value is not None
+        return node.component(self.component_type).value is not None
 
     def create_match_validator(self) -> Callable[[UnifiedTreeNode], bool]:
         return lambda node: True
@@ -38,15 +38,19 @@ class FullComponent(TreeComponent):
         ).lock_ref
 
     def evict_component(self, node: UnifiedTreeNode, is_leaf: bool) -> int:
-        self.cache.token_to_kv_pool_allocator.free(node.full_value)
-        freed = len(node.full_value)
+        self.cache.token_to_kv_pool_allocator.free(
+            node.component(self.component_type).value
+        )
+        freed = len(node.component(self.component_type).value)
         self.cache.component_evictable_size_[self.component_type] -= freed
         return freed
 
     def eviction_priority(self, is_leaf: bool) -> int:
         return 0 if is_leaf else 2
 
-    def drive_eviction(self, params: EvictParams, tracker: dict[ComponentType, int]) -> None:
+    def drive_eviction(
+        self, params: EvictParams, tracker: dict[ComponentType, int]
+    ) -> None:
         request = params.num_tokens
         lru = self.cache.lru_lists[self.component_type]
         while tracker[self.component_type] < request:
@@ -65,10 +69,10 @@ class FullComponent(TreeComponent):
         while cur != self.cache.root_node:
             if cur.component(self.component_type).lock_ref == 0:
                 self.cache.component_evictable_size_[self.component_type] -= len(
-                    cur.full_value
+                    cur.component(self.component_type).value
                 )
                 self.cache.component_protected_size_[self.component_type] += len(
-                    cur.full_value
+                    cur.component(self.component_type).value
                 )
             cur.component(self.component_type).lock_ref += 1
             cur = cur.parent
@@ -82,10 +86,10 @@ class FullComponent(TreeComponent):
             assert cur.component(self.component_type).lock_ref > 0
             if cur.component(self.component_type).lock_ref == 1:
                 self.cache.component_evictable_size_[self.component_type] += len(
-                    cur.full_value
+                    cur.component(self.component_type).value
                 )
                 self.cache.component_protected_size_[self.component_type] -= len(
-                    cur.full_value
+                    cur.component(self.component_type).value
                 )
             cur.component(self.component_type).lock_ref -= 1
             cur = cur.parent

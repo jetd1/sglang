@@ -12,6 +12,7 @@ from sglang.srt.mem_cache.base_prefix_cache import (
     InsertResult,
 )
 from sglang.srt.mem_cache.unified_cache_components.tree_component import (
+    BASE_COMPONENT_TYPE,
     ComponentType,
     TreeComponent,
     next_component_uuid,
@@ -60,7 +61,7 @@ class SWAComponent(TreeComponent):
         state = {"len": float("inf")}
 
         def validator(node: UnifiedTreeNode) -> bool:
-            if node.component_value(ct) is None:
+            if node.component(ct).value is None:
                 state["len"] = 0
                 return False
             state["len"] += len(node.key)
@@ -79,7 +80,7 @@ class SWAComponent(TreeComponent):
         if params.prev_prefix_len >= total_prefix_len + prefix_len:
             return prefix_len
 
-        is_tombstone = node.component_value(self.component_type) is None
+        is_tombstone = node.component(self.component_type).value is None
         if not is_tombstone:
             return prefix_len
 
@@ -93,21 +94,29 @@ class SWAComponent(TreeComponent):
 
         if swa_evicted_seqlen <= total_prefix_len:
             # Branch 1: entire value_slice is within SWA window — recover
-            self.cache.token_to_kv_pool_allocator.free(node.full_value)
-            node.full_value = value_slice.clone()
-            swa_value = self._translate_full_to_swa(node.full_value)
-            node.set_component_value(self.component_type, swa_value)
+            self.cache.token_to_kv_pool_allocator.free(
+                node.component(BASE_COMPONENT_TYPE).value
+            )
+            node.component(BASE_COMPONENT_TYPE).value = value_slice.clone()
+            swa_value = self._translate_full_to_swa(
+                node.component(BASE_COMPONENT_TYPE).value
+            )
+            node.component(self.component_type).value = swa_value
             self.cache.lru_lists[self.component_type].insert_mru(node)
             self.cache.component_evictable_size_[self.component_type] += len(swa_value)
             return 0
         elif swa_evicted_seqlen < total_prefix_len + prefix_len:
             # Branch 2: value_slice[start_idx:] is within SWA window — partial recover
             start_idx = swa_evicted_seqlen - total_prefix_len
-            self.cache.token_to_kv_pool_allocator.free(node.full_value[start_idx:])
+            self.cache.token_to_kv_pool_allocator.free(
+                node.component(BASE_COMPONENT_TYPE).value[start_idx:]
+            )
             self.cache._split_node(node.key, node, start_idx)
-            node.full_value = value_slice[start_idx:].clone()
-            swa_value = self._translate_full_to_swa(node.full_value)
-            node.set_component_value(self.component_type, swa_value)
+            node.component(BASE_COMPONENT_TYPE).value = value_slice[start_idx:].clone()
+            swa_value = self._translate_full_to_swa(
+                node.component(BASE_COMPONENT_TYPE).value
+            )
+            node.component(self.component_type).value = swa_value
             self.cache.lru_lists[self.component_type].insert_mru(node)
             self.cache.component_evictable_size_[self.component_type] += len(swa_value)
             return start_idx
@@ -134,8 +143,10 @@ class SWAComponent(TreeComponent):
         split_pos = params.swa_evicted_seqlen - node_start
 
         if split_pos <= 0:
-            swa_value = self._translate_full_to_swa(node.full_value)
-            node.set_component_value(self.component_type, swa_value)
+            swa_value = self._translate_full_to_swa(
+                node.component(BASE_COMPONENT_TYPE).value
+            )
+            node.component(self.component_type).value = swa_value
             self.cache.lru_lists[self.component_type].insert_mru(node)
             self.cache.component_evictable_size_[self.component_type] += len(swa_value)
         elif split_pos < len(node.key):
@@ -143,8 +154,10 @@ class SWAComponent(TreeComponent):
             # Split into parent (tombstone, no SWA) and child (with SWA)
             # After _split_node, `node` becomes the child
             self.cache._split_node(node.key, node, split_pos)
-            swa_value = self._translate_full_to_swa(node.full_value)
-            node.set_component_value(self.component_type, swa_value)
+            swa_value = self._translate_full_to_swa(
+                node.component(BASE_COMPONENT_TYPE).value
+            )
+            node.component(self.component_type).value = swa_value
             self.cache.lru_lists[self.component_type].insert_mru(node)
             self.cache.component_evictable_size_[self.component_type] += len(swa_value)
 
@@ -155,17 +168,17 @@ class SWAComponent(TreeComponent):
             self.component_type
         ).lock_ref
 
-        child_swa_value = child.component_value(self.component_type)
+        child_swa_value = child.component(self.component_type).value
         if child_swa_value is not None:
             split_len = len(new_parent.key)
-            new_parent.set_component_value(
-                self.component_type, child_swa_value[:split_len].clone()
-            )
-            child.set_component_value(
-                self.component_type, child_swa_value[split_len:].clone()
-            )
+            new_parent.component(self.component_type).value = child_swa_value[
+                :split_len
+            ].clone()
+            child.component(self.component_type).value = child_swa_value[
+                split_len:
+            ].clone()
         else:
-            new_parent.set_component_value(self.component_type, None)
+            new_parent.component(self.component_type).value = None
 
         # parent inherits the swa_uuid from child for swa lock ref
         new_parent.component(self.component_type).metadata["uuid"] = child.component(
@@ -174,30 +187,34 @@ class SWAComponent(TreeComponent):
         child.component(self.component_type).metadata.pop("uuid", None)
 
     def evict_component(self, node: UnifiedTreeNode, is_leaf: bool) -> int:
-        swa_value = node.component_value(self.component_type)
+        swa_value = node.component(self.component_type).value
         if swa_value is None:
             return 0
         # Direct swa_attn_allocator.free(swa_value) would double-free
         # free_swa(full_value) has the mapping guard to avoid double-free
         # TODO: decoupling full and swa free, need further discussion on mapping necessity
-        self.cache.token_to_kv_pool_allocator.free_swa(node.full_value)
+        self.cache.token_to_kv_pool_allocator.free_swa(
+            node.component(BASE_COMPONENT_TYPE).value
+        )
         freed = len(swa_value)
         self.cache.component_evictable_size_[self.component_type] -= freed
         if not is_leaf:
-            node.set_component_value(self.component_type, None)
+            node.component(self.component_type).value = None
         return freed
 
     def eviction_priority(self, is_leaf: bool) -> int:
         return 0 if is_leaf else 1
 
-    def drive_eviction(self, params: EvictParams, tracker: dict[ComponentType, int]) -> None:
+    def drive_eviction(
+        self, params: EvictParams, tracker: dict[ComponentType, int]
+    ) -> None:
         request = params.swa_num_tokens
         lru = self.cache.lru_lists[self.component_type]
         x = lru.get_lru_no_lock()
         while (
             tracker[self.component_type] < request and x is not None and lru.in_list(x)
         ):
-            assert x.component_value(self.component_type) is not None
+            assert x.component(self.component_type).value is not None
             if len(x.children) > 0:
                 x_next = lru.get_prev_no_lock(x)
                 self.cache._evict_component_and_detach_lru(
@@ -222,7 +239,7 @@ class SWAComponent(TreeComponent):
         cur = node
         while cur != self.cache.root_node and swa_lock_size < sliding_window_size:
             assert (
-                cur.component_value(self.component_type) is not None
+                cur.component(self.component_type).value is not None
             ), f"acquire_component_lock({self.component_type}) on tombstoned node {cur.id}"
             comp = cur.component(self.component_type)
             if comp.lock_ref == 0:
@@ -252,7 +269,7 @@ class SWAComponent(TreeComponent):
         cur = node
         while cur != self.cache.root_node and dec_swa:
             assert (
-                cur.component_value(self.component_type) is not None
+                cur.component(self.component_type).value is not None
             ), f"release_component_lock({self.component_type}) on tombstoned node {cur.id}"
             comp = cur.component(self.component_type)
             assert (

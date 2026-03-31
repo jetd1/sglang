@@ -76,10 +76,10 @@ class TreeComponent(ABC):
         self.cache = cache
 
     def node_has_component_data(self, node: UnifiedTreeNode) -> bool:
-        return node.component_value(self.component_type) is not None
+        return node.component(self.component_type).value is not None
 
     def value_len(self, node: UnifiedTreeNode) -> int:
-        value = node.component_value(self.component_type)
+        value = node.component(self.component_type).value
         return len(value) if value is not None else 0
 
     @property
@@ -213,7 +213,9 @@ class TreeComponent(ABC):
         return 0
 
     @abstractmethod
-    def drive_eviction(self, params: EvictParams, tracker: dict[ComponentType, int]) -> None:
+    def drive_eviction(
+        self, params: EvictParams, tracker: dict[ComponentType, int]
+    ) -> None:
         """Drive eviction from this component's LRU list.
         Each component extracts its own request from params, walks its own
         LRU, evicts, and calls cache._cascade_evict for priority cascade.

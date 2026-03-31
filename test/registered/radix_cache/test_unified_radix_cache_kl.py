@@ -248,7 +248,7 @@ class TestUnifiedSWARadixCache(UnifiedRadixTreeTestMixin, CustomTestCase):
                 "2",
                 "--mem-fraction-static",
                 "0.80",
-                "--disable-piecewise-cuda-graph"
+                "--disable-piecewise-cuda-graph",
             ],
             env={"SGLANG_ENABLE_UNIFIED_RADIX_TREE": "1"},
         )

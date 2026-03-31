@@ -69,28 +69,14 @@ class UnifiedTreeNode:
     def component(self, component_type: ComponentType) -> ComponentData:
         return self.component_data[component_type]
 
-    @property
-    def full_value(self) -> Optional[torch.Tensor]:
-        return self.component(BASE_COMPONENT_TYPE).value
-
-    @full_value.setter
-    def full_value(self, value: Optional[torch.Tensor]) -> None:
-        self.component(BASE_COMPONENT_TYPE).value = value
-
-    def component_value(self, component_type: ComponentType) -> Optional[torch.Tensor]:
-        return self.component(component_type).value
-
-    def set_component_value(
-        self, component_type: ComponentType, value: Optional[torch.Tensor]
-    ) -> None:
-        self.component(component_type).value = value
-
     def __lt__(self, other: UnifiedTreeNode):
         return self.last_access_time < other.last_access_time
 
 
 class UnifiedLRUList:
-    def __init__(self, component_type: ComponentType, tree_components: list[ComponentType]):
+    def __init__(
+        self, component_type: ComponentType, tree_components: list[ComponentType]
+    ):
         self.component_type = component_type
         self.head = UnifiedTreeNode(tree_components)
         self.tail = UnifiedTreeNode(tree_components)
@@ -223,7 +209,7 @@ class UnifiedRadixCache(BasePrefixCache):
     def reset(self) -> None:
         self.root_node = UnifiedTreeNode(self.tree_components)
         self.root_node.key = RadixKey([], None)
-        self.root_node.full_value = []
+        self.root_node.component(BASE_COMPONENT_TYPE).value = []
         for ct in self.tree_components:
             self.root_node.component(ct).lock_ref = 1
         self.component_evictable_size_ = {ct: 0 for ct in self.tree_components}
@@ -387,9 +373,7 @@ class UnifiedRadixCache(BasePrefixCache):
         if effective_cache_len <= 0:
             req.prefix_indices = kv_indices_orig.to(dtype=torch.int64, copy=True)
             for comp in self.components.values():
-                comp.cleanup_after_caching_req(
-                    req, False, insert_params=insert_params
-                )
+                comp.cleanup_after_caching_req(req, False, insert_params=insert_params)
             return
 
         kv_indices = kv_indices_orig[:effective_cache_len]
@@ -476,7 +460,7 @@ class UnifiedRadixCache(BasePrefixCache):
             if prefix_len < len(child.key):
                 # Read-only: do not split, ignore partial match and stop
                 break
-            value.append(child.full_value)
+            value.append(child.component(BASE_COMPONENT_TYPE).value)
             node = child
             _update_best_if_valid(node)
             key = key[prefix_len:]
@@ -508,10 +492,10 @@ class UnifiedRadixCache(BasePrefixCache):
             prefix_len = self.key_match_fn(child.key, key)
             if prefix_len < len(child.key):
                 node = self._split_node(child.key, child, prefix_len)
-                value.append(node.full_value)
+                value.append(node.component(BASE_COMPONENT_TYPE).value)
                 _update_best_if_valid(node)
                 break
-            value.append(child.full_value)
+            value.append(child.component(BASE_COMPONENT_TYPE).value)
             node = child
             _update_best_if_valid(node)
             key = key[prefix_len:]
@@ -560,13 +544,17 @@ class UnifiedRadixCache(BasePrefixCache):
         new_node.children = {self.get_child_key_fn(key[split_len:]): child}
         new_node.parent = child.parent
         new_node.key = child.key[:split_len]
-        new_node.full_value = child.full_value[:split_len].clone()
+        new_node.component(BASE_COMPONENT_TYPE).value = (
+            child.component(BASE_COMPONENT_TYPE).value[:split_len].clone()
+        )
 
         self._for_each_component_lru(child, UnifiedLRUList.remove_node)
 
         child.parent = new_node
         child.key = child.key[split_len:]
-        child.full_value = child.full_value[split_len:].clone()
+        child.component(BASE_COMPONENT_TYPE).value = (
+            child.component(BASE_COMPONENT_TYPE).value[split_len:].clone()
+        )
 
         for component in self.components.values():
             component.redistribute_on_node_split(new_node, child)
@@ -591,7 +579,7 @@ class UnifiedRadixCache(BasePrefixCache):
         new_node = UnifiedTreeNode(self.tree_components)
         new_node.parent = parent
         new_node.key = key
-        new_node.full_value = value.clone()
+        new_node.component(BASE_COMPONENT_TYPE).value = value.clone()
         parent.children[self.get_child_key_fn(key)] = new_node
         self.lru_lists[BASE_COMPONENT_TYPE].insert_mru(new_node)
         self.component_evictable_size_[BASE_COMPONENT_TYPE] += len(value)
@@ -681,7 +669,10 @@ class UnifiedRadixCache(BasePrefixCache):
         return freed
 
     def _cascade_evict(
-        self, node: UnifiedTreeNode, trigger: TreeComponent, tracker: dict[ComponentType, int]
+        self,
+        node: UnifiedTreeNode,
+        trigger: TreeComponent,
+        tracker: dict[ComponentType, int],
     ):
         is_leaf = len(node.children) == 0
         trigger_priority = trigger.eviction_priority(is_leaf)
@@ -770,11 +761,11 @@ class UnifiedRadixCache(BasePrefixCache):
         stack = [self.root_node]
         while stack:
             node = stack.pop()
-            total_size += len(node.full_value)
+            total_size += len(node.component(BASE_COMPONENT_TYPE).value)
             for ct in self.tree_components:
                 if ct == BASE_COMPONENT_TYPE:
                     continue
-                value = node.component_value(ct)
+                value = node.component(ct).value
                 if value is not None:
                     total_aux_size += len(value)
             for child in node.children.values():
@@ -786,7 +777,7 @@ class UnifiedRadixCache(BasePrefixCache):
 
         def _dfs(node: UnifiedTreeNode):
             for child in node.children.values():
-                values.append(child.full_value)
+                values.append(child.component(BASE_COMPONENT_TYPE).value)
                 _dfs(child)
 
         _dfs(self.root_node)
@@ -794,14 +785,16 @@ class UnifiedRadixCache(BasePrefixCache):
             return torch.cat(values)
         return torch.tensor([], dtype=torch.int64, device=self.device)
 
-    def _all_component_values_flatten(self, component_type: ComponentType) -> torch.Tensor:
+    def _all_component_values_flatten(
+        self, component_type: ComponentType
+    ) -> torch.Tensor:
         if component_type not in self.components:
             return torch.tensor([], dtype=torch.int64, device=self.device)
 
         values = []
 
         def _dfs(node: UnifiedTreeNode):
-            value = node.component_value(component_type)
+            value = node.component(component_type).value
             if value is not None:
                 values.append(value)
             for child in node.children.values():
@@ -854,7 +847,7 @@ class UnifiedRadixCache(BasePrefixCache):
         while stack:
             node, indent = stack.pop()
             component_str = " ".join(
-                f"{ct}={'yes' if node.component_value(ct) is not None else 'no'}"
+                f"{ct}={'yes' if node.component(ct).value is not None else 'no'}"
                 for ct in self.tree_components
             )
             print(
