@@ -25,7 +25,9 @@ class SchedulerRuntimeCheckerMixin:
         if not hasattr(self, "session_controller"):
             return 0
         return sum(
-            1 for session in self.session_controller.sessions.values() if session.streaming
+            1
+            for session in self.session_controller.sessions.values()
+            if session.streaming
         )
 
     def _session_held_tokens(self: Scheduler) -> int:

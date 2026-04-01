@@ -221,7 +221,6 @@ from sglang.srt.utils import (
     suppress_other_loggers,
 )
 from sglang.srt.utils.common import is_npu
-from sglang.srt.utils.common import log_info_on_rank0
 from sglang.srt.utils.hf_transformers_utils import (
     get_processor,
     get_tokenizer,
