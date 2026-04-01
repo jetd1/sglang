@@ -90,8 +90,6 @@ class TestGLM5MXFP4PerfMI35x(unittest.TestCase):
                 "name": "basic",
                 "other_args": [
                     "--trust-remote-code",
-                    "--quantization",
-                    "mxfp4",
                     "--tp",
                     "8",
                     "--chunked-prefill-size",
