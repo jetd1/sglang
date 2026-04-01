@@ -162,6 +162,10 @@ def get_normalized_target_modules(
         "v_proj": "qkv_proj",
         "gate_proj": "gate_up_proj",
         "up_proj": "gate_up_proj",
+        # DSA/MLA: q_a_proj + kv_a_proj_with_mqa are fused into
+        # fused_qkv_a_proj_with_mqa in SGLang's DeepSeek-V2 model
+        "q_a_proj": "fused_qkv_a_proj_with_mqa",
+        "kv_a_proj_with_mqa": "fused_qkv_a_proj_with_mqa",
         "embed_tokens": "embed_tokens",
         "vocab_emb": "embed_tokens",
         "embeddings": "embed_tokens",
@@ -187,6 +191,7 @@ def get_stacked_multiply(module_name: str) -> int:
         "qkv_proj": 3,
         "gate_up_proj": 2,
         "gate_up_proj_moe": 2,
+        "fused_qkv_a_proj_with_mqa": 2,
     }
     return stacked_rank[module_name] if module_name in stacked_rank else 1
 
@@ -212,7 +217,6 @@ ROW_PARALLELISM_LINEAR_LORA_NAMES = ["o_proj", "down_proj", "down_proj_moe"]
 # ReplicatedLinear modules — full weight on every TP rank, no sharding for
 # either LoRA A or LoRA B buffers.
 REPLICATED_LINEAR_LORA_NAMES = [
-    "kv_a_proj_with_mqa",
     "fused_qkv_a_proj_with_mqa",
     "wq_b",
     "wk",

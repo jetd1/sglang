@@ -138,6 +138,7 @@ class LoRAAdapter(nn.Module):
             weight_names = list(layer.weights.keys())
             self.normalize_qkv_proj(weight_names, layer.weights)
             self.normalize_gate_up_proj(weight_names, layer.weights)
+            self.normalize_fused_qkv_a_proj(weight_names, layer.weights)
 
     def normalize_qkv_proj(
         self, weight_names: List[str], weights: Dict[str, torch.Tensor]
@@ -218,6 +219,32 @@ class LoRAAdapter(nn.Module):
                 if "lora_A" in weight_name:
                     weights[gate_up_name] = weights[gate_up_name].repeat(2, 1)
                 # else: no-op as LoRA B weight is already stacked.
+
+    def normalize_fused_qkv_a_proj(
+        self, weight_names: List[str], weights: Dict[str, torch.Tensor]
+    ):
+        """Fuse q_a_proj + kv_a_proj_with_mqa → fused_qkv_a_proj_with_mqa.
+
+        Used by DeepSeek-V2 / GLM-5 DSA attention where SGLang fuses these
+        two projections into a single ReplicatedLinear layer.
+        """
+        for weight_name in weight_names:
+            if "q_a_proj" in weight_name and "fused_qkv_a_proj" not in weight_name:
+                kv_name = weight_name.replace("q_a_proj", "kv_a_proj_with_mqa")
+                fused_name = weight_name.replace(
+                    "q_a_proj", "fused_qkv_a_proj_with_mqa"
+                )
+                if kv_name not in weights:
+                    # kv_a_proj_with_mqa not in adapter — skip fusion
+                    continue
+                # Concatenate along dim 0:
+                # lora_A: [rank, hidden_size] + [rank, hidden_size] → [rank*2, hidden_size]
+                # lora_B: [q_lora_rank, rank] + [kv_lora_rank+rope_dim, rank] → [fused_out, rank]
+                weights[fused_name] = torch.cat(
+                    (weights[weight_name], weights[kv_name]), dim=0
+                )
+                weights.pop(weight_name)
+                weights.pop(kv_name)
 
     def pin_weights_in_cpu(self):
         for layer in self.layers:

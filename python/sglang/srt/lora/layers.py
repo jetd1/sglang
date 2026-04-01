@@ -431,15 +431,57 @@ class ReplicatedLinearWithLoRA(BaseLayerWithLoRA):
             dtype=torch.int32,
             device=next(self.base_layer.parameters()).device,
         )
+        # Detect if this is a fused/stacked module by checking if A buffer
+        # rank dim > expected rank (stacked_multiply > 1).  For fused
+        # modules like fused_qkv_a_proj_with_mqa, we use the gate_up_lora
+        # path which handles stacked A and sliced B via slice_offsets.
+        # A_buffer shape: [num_loras, rank * c, input_dim]
+        # B_buffer shape: [num_loras, output_dim, rank]
+        # For simple modules c=1, A rank_dim == B rank_dim.
+        # For stacked c=2, A rank_dim == 2 * B rank_dim.
+        self.is_stacked = A_buffer.shape[-2] != B_buffer.shape[-1]
 
     def apply_lora(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        lora_a_output = self.lora_backend.run_lora_a_sgemm(x, self.A_buffer)
-        lora_output = self.lora_backend.run_lora_b_sgemm(
-            x=lora_a_output,
-            weights=self.B_buffer,
-            output_offset=self.output_offset,
-            base_output=base_output,
-        )
+        if self.is_stacked:
+            # Fused module path (e.g. fused_qkv_a_proj_with_mqa = q_a_proj + kv_a_proj)
+            # Sub-module output dims may differ, so we can't use run_gate_up_lora
+            # (which assumes equal splits).  Call the triton ops directly.
+            from sglang.srt.lora.triton_ops.chunked_sgmv_expand import (
+                chunked_sgmv_lora_expand_forward,
+            )
+            from sglang.srt.lora.triton_ops.chunked_sgmv_shrink import (
+                chunked_sgmv_lora_shrink_forward,
+            )
+
+            num_slices = len(self.output_offset) - 1
+            max_slice_size = max(
+                self.output_offset[i + 1] - self.output_offset[i]
+                for i in range(num_slices)
+            ).item()
+
+            lora_a_output = chunked_sgmv_lora_shrink_forward(
+                x=x,
+                weights=self.A_buffer,
+                batch_info=self.lora_backend.batch_info,
+                num_slices=num_slices,
+            )
+            lora_output = chunked_sgmv_lora_expand_forward(
+                x=lora_a_output,
+                weights=self.B_buffer,
+                batch_info=self.lora_backend.batch_info,
+                slice_offsets=self.output_offset,
+                max_slice_size=max_slice_size,
+                base_output=base_output,
+            )
+        else:
+            # Simple module path (wk, wq_b, weights_proj, etc.)
+            lora_a_output = self.lora_backend.run_lora_a_sgemm(x, self.A_buffer)
+            lora_output = self.lora_backend.run_lora_b_sgemm(
+                x=lora_a_output,
+                weights=self.B_buffer,
+                output_offset=self.output_offset,
+                base_output=base_output,
+            )
         return lora_output
 
     def forward(self, x: torch.Tensor):
