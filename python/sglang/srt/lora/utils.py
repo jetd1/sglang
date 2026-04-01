@@ -209,6 +209,16 @@ def get_target_module_name(full_module_name: str, target_modules: Set[str]) -> s
 EMBEDDING_NAMES = ["embed_tokens", "lm_head"]
 ROW_PARALLELISM_LINEAR_LORA_NAMES = ["o_proj", "down_proj", "down_proj_moe"]
 
+# ReplicatedLinear modules — full weight on every TP rank, no sharding for
+# either LoRA A or LoRA B buffers.
+REPLICATED_LINEAR_LORA_NAMES = [
+    "kv_a_proj_with_mqa",
+    "fused_qkv_a_proj_with_mqa",
+    "wq_b",
+    "wk",
+    "weights_proj",
+]
+
 
 def get_lm_head_lora_b_shard_size(output_dim: int, shard_indices=None) -> int:
     """Get the LoRA B output dimension for lm_head, accounting for TP.
