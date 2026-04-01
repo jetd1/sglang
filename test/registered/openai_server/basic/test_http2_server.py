@@ -88,13 +88,6 @@ class TestHTTP2Server(CustomTestCase):
 
     def test_h2c_with_curl(self):
         """Verify the server actually speaks HTTP/2 via h2c."""
-        probe = subprocess.run(
-            ["curl", "--http2-prior-knowledge", "-V"],
-            capture_output=True,
-        )
-        if probe.returncode != 0:
-            self.skipTest("curl does not support --http2-prior-knowledge")
-
         result = subprocess.run(
             [
                 "curl",
