@@ -186,8 +186,10 @@ tar czf "$GITHUB_WORKSPACE/multinode_server_logs.tar.gz" -C "$LOGS_DIR" .
 RESULT_SUBDIRS=$(find "$LOGS_DIR" -maxdepth 1 -type d -name "*isl*osl*" 2>/dev/null || true)
 
 if [ -z "$RESULT_SUBDIRS" ]; then
-    echo "WARNING: No result subdirectories found in $LOGS_DIR"
+    echo "ERROR: No result subdirectories found in $LOGS_DIR — benchmark did not produce any output"
+    exit 1
 else
+    RESULT_COUNT=0
     for result_subdir in $RESULT_SUBDIRS; do
         CONFIG_NAME=$(basename "$result_subdir")
         RESULT_FILES=$(find "$result_subdir" -name "results_concurrency_*.json" 2>/dev/null || true)
@@ -201,9 +203,14 @@ else
                 DEST="$GITHUB_WORKSPACE/${RESULT_FILENAME}_${CONFIG_NAME}_conc${concurrency}_gpus_${gpus}_ctx_${ctx}_gen_${gen}.json"
                 cp "$result_file" "$DEST"
                 echo "Saved: $DEST"
+                RESULT_COUNT=$((RESULT_COUNT + 1))
             fi
         done
     done
+    if [ "$RESULT_COUNT" -eq 0 ]; then
+        echo "ERROR: Result subdirectories found but no result JSON files produced — benchmark failed"
+        exit 1
+    fi
 fi
 
 echo "Done."
