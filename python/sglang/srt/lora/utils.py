@@ -125,14 +125,19 @@ def get_hidden_dim(
             qk_nope_head_dim = getattr(config, "qk_nope_head_dim", 128)
             v_head_dim = getattr(config, "v_head_dim", 128)
             return kv_lora_rank, config.num_attention_heads * (qk_nope_head_dim + v_head_dim)
-        # NSA Indexer modules
+        # NSA Indexer modules — use index_n_heads / index_head_dim, NOT
+        # the main attention's num_attention_heads / head_dim.
         elif module_name == "wq_b":
             q_lora_rank = getattr(config, "q_lora_rank", 1536)
-            return q_lora_rank, config.num_attention_heads * head_dim
+            index_n_heads = getattr(config, "index_n_heads", 32)
+            index_head_dim = getattr(config, "index_head_dim", 128)
+            return q_lora_rank, index_n_heads * index_head_dim
         elif module_name == "wk":
-            return config.hidden_size, head_dim
+            index_head_dim = getattr(config, "index_head_dim", 128)
+            return config.hidden_size, index_head_dim
         elif module_name == "weights_proj":
-            return config.hidden_size, config.num_attention_heads
+            index_n_heads = getattr(config, "index_n_heads", 32)
+            return config.hidden_size, index_n_heads
         else:
             raise NotImplementedError(
                 "get_hidden_dim not implemented for " + module_name

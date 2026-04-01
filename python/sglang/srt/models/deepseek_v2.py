@@ -1137,6 +1137,13 @@ class DeepseekV2AttentionMLA(
                 quant_config=quant_config,
                 prefix=add_prefix("fused_qkv_a_proj_with_mqa", prefix),
             )
+            # Store partition sizes for LoRA stacked module support.
+            # This tells ReplicatedLinearWithLoRA how to split the output
+            # into sub-modules (q_a_proj, kv_a_proj_with_mqa).
+            self.fused_qkv_a_proj_with_mqa.output_partition_sizes = [
+                self.q_lora_rank,
+                self.kv_lora_rank + self.qk_rope_head_dim,
+            ]
             self.q_a_layernorm = RMSNorm(self.q_lora_rank, eps=config.rms_norm_eps)
             self.q_b_proj = ColumnParallelLinear(
                 q_lora_rank,

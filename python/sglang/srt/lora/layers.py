@@ -425,21 +425,59 @@ class ReplicatedLinearWithLoRA(BaseLayerWithLoRA):
         self.set_lora = True
         self.A_buffer = A_buffer
         self.B_buffer = B_buffer
-        output_size = self.base_layer.output_size
-        self.output_offset = torch.tensor(
-            [0, output_size],
-            dtype=torch.int32,
-            device=next(self.base_layer.parameters()).device,
-        )
         # Detect if this is a fused/stacked module by checking if A buffer
-        # rank dim > expected rank (stacked_multiply > 1).  For fused
-        # modules like fused_qkv_a_proj_with_mqa, we use the gate_up_lora
-        # path which handles stacked A and sliced B via slice_offsets.
+        # rank dim > expected rank (stacked_multiply > 1).
         # A_buffer shape: [num_loras, rank * c, input_dim]
         # B_buffer shape: [num_loras, output_dim, rank]
-        # For simple modules c=1, A rank_dim == B rank_dim.
-        # For stacked c=2, A rank_dim == 2 * B rank_dim.
-        self.is_stacked = A_buffer.shape[-2] != B_buffer.shape[-1]
+        rank = B_buffer.shape[-1]
+        a_rank_dim = A_buffer.shape[-2]
+        self.num_slices = a_rank_dim // rank
+        self.is_stacked = self.num_slices > 1
+
+        if self.is_stacked:
+            # For fused modules, we need proper slice offsets.
+            # The base layer's output_size is the total fused output.
+            # We need the sub-module boundaries.  Since the B weights are
+            # concatenated (e.g. [q_out + kv_out, rank]), we can infer
+            # per-slice sizes from B_buffer dim and num_slices.
+            # However, slices may be unequal.  We use the model config's
+            # packed_modules_mapping info.  For now, we read sub-sizes from
+            # the base layer if available, otherwise divide evenly.
+            total_output = self.base_layer.output_size
+            if hasattr(self.base_layer, "output_partition_sizes"):
+                offsets = [0]
+                for sz in self.base_layer.output_partition_sizes:
+                    offsets.append(offsets[-1] + sz)
+            else:
+                # Infer from B buffer: each LoRA adapter was loaded with
+                # concatenated B weights.  We can read the per-adapter
+                # actual sizes from the loaded B buffer shape, but we need
+                # the partition split.  Use config-derived info stored during
+                # normalize.  For now use the packed_modules_mapping dims.
+                # Fallback: store partition_sizes on the base_layer during
+                # model construction.
+                # Simple fallback: even split (works for gate_up, not for DSA).
+                # For DSA fused_qkv_a_proj: sub-sizes come from config.
+                # We'll set them below in a model-specific hook.
+                slice_size = total_output // self.num_slices
+                offsets = [i * slice_size for i in range(self.num_slices + 1)]
+                # Correct the last offset
+                offsets[-1] = total_output
+            self.output_offset = torch.tensor(
+                offsets,
+                dtype=torch.int32,
+                device=next(self.base_layer.parameters()).device,
+            )
+            self.max_slice_size = max(
+                offsets[i + 1] - offsets[i] for i in range(len(offsets) - 1)
+            )
+        else:
+            output_size = self.base_layer.output_size
+            self.output_offset = torch.tensor(
+                [0, output_size],
+                dtype=torch.int32,
+                device=next(self.base_layer.parameters()).device,
+            )
 
     def apply_lora(self, base_output: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         if self.is_stacked:
