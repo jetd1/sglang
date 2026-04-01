@@ -99,6 +99,38 @@ def get_hidden_dim(
             # For lm_head: input is hidden_size, output is vocab_size
             # if contain extra tokens will be added; otherwise is 0.
             return config.hidden_size, config.vocab_size + lora_added_vocab_size
+        # === DSA / MLA modules (DeepSeek-V2, GLM-5) ===
+        elif module_name == "kv_a_proj_with_mqa":
+            kv_lora_rank = getattr(config, "kv_lora_rank", 512)
+            qk_rope_head_dim = getattr(config, "qk_rope_head_dim", 64)
+            return config.hidden_size, kv_lora_rank + qk_rope_head_dim
+        elif module_name == "fused_qkv_a_proj_with_mqa":
+            q_lora_rank = getattr(config, "q_lora_rank", 1536)
+            kv_lora_rank = getattr(config, "kv_lora_rank", 512)
+            qk_rope_head_dim = getattr(config, "qk_rope_head_dim", 64)
+            return config.hidden_size, q_lora_rank + kv_lora_rank + qk_rope_head_dim
+        elif module_name == "q_a_proj":
+            q_lora_rank = getattr(config, "q_lora_rank", 1536)
+            return config.hidden_size, q_lora_rank
+        elif module_name == "q_b_proj":
+            q_lora_rank = getattr(config, "q_lora_rank", 1536)
+            qk_nope_head_dim = getattr(config, "qk_nope_head_dim", 128)
+            qk_rope_head_dim = getattr(config, "qk_rope_head_dim", 64)
+            qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
+            return q_lora_rank, config.num_attention_heads * qk_head_dim
+        elif module_name == "kv_b_proj":
+            kv_lora_rank = getattr(config, "kv_lora_rank", 512)
+            qk_nope_head_dim = getattr(config, "qk_nope_head_dim", 128)
+            v_head_dim = getattr(config, "v_head_dim", 128)
+            return kv_lora_rank, config.num_attention_heads * (qk_nope_head_dim + v_head_dim)
+        # NSA Indexer modules
+        elif module_name == "wq_b":
+            q_lora_rank = getattr(config, "q_lora_rank", 1536)
+            return q_lora_rank, config.num_attention_heads * head_dim
+        elif module_name == "wk":
+            return config.hidden_size, head_dim
+        elif module_name == "weights_proj":
+            return config.hidden_size, config.num_attention_heads
         else:
             raise NotImplementedError(
                 "get_hidden_dim not implemented for " + module_name
