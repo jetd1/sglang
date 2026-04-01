@@ -93,7 +93,7 @@ def get_glm5_mxfp4_models() -> List[ModelConfig]:
             other_args=[
                 "--trust-remote-code",
                 "--quantization",
-                "quark",
+                "mxfp4",
                 "--chunked-prefill-size",
                 "131072",
                 "--disable-radix-cache",
