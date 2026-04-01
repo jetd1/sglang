@@ -140,6 +140,8 @@ class TestEnableMetrics(CustomTestCase):
             "sglang:num_queue_reqs",
             "sglang:num_grammar_queue_reqs",
             "sglang:cache_hit_rate",
+            "sglang:num_streaming_sessions",
+            "sglang:streaming_session_held_tokens",
             "sglang:spec_accept_length",
             "sglang:prompt_tokens_total",
             "sglang:generation_tokens_total",

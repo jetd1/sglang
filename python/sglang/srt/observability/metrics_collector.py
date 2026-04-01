@@ -130,6 +130,10 @@ class SchedulerStats:
     hicache_host_used_tokens: int = 0
     hicache_host_total_tokens: int = 0
 
+    # Streaming session metrics
+    num_streaming_sessions: int = 0
+    streaming_session_held_tokens: int = 0
+
     # Routing key metrics
     num_unique_running_routing_keys: int = 0
     routing_key_running_req_counts: List[int] = field(default_factory=list)
@@ -267,6 +271,18 @@ class SchedulerMetricsCollector:
         self.max_total_num_tokens = Gauge(
             name="sglang:max_total_num_tokens",
             documentation="Maximum total number of tokens in the KV cache pool.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+        self.num_streaming_sessions = Gauge(
+            name="sglang:num_streaming_sessions",
+            documentation="The number of active streaming sessions.",
+            labelnames=labels.keys(),
+            multiprocess_mode="mostrecent",
+        )
+        self.streaming_session_held_tokens = Gauge(
+            name="sglang:streaming_session_held_tokens",
+            documentation="The number of KV tokens currently held by streaming session slots.",
             labelnames=labels.keys(),
             multiprocess_mode="mostrecent",
         )
@@ -948,6 +964,10 @@ class SchedulerMetricsCollector:
         self._log_gauge(self.cache_hit_rate, stats.cache_hit_rate)
 
         self._log_gauge(self.max_total_num_tokens, stats.max_total_num_tokens)
+        self._log_gauge(self.num_streaming_sessions, stats.num_streaming_sessions)
+        self._log_gauge(
+            self.streaming_session_held_tokens, stats.streaming_session_held_tokens
+        )
 
         # Speculative decoding
         self._log_gauge(self.spec_accept_length, stats.spec_accept_length)

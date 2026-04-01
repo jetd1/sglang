@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 class SchedulerRuntimeCheckerMixin:
+    def _active_streaming_session_count(self: Scheduler) -> int:
+        if not hasattr(self, "session_controller"):
+            return 0
+        return sum(
+            1 for session in self.session_controller.sessions.values() if session.streaming
+        )
+
     def _session_held_tokens(self: Scheduler) -> int:
         if isinstance(self.tree_cache, SessionAwareCache):
             return self.tree_cache.session_held_tokens()
@@ -327,6 +334,8 @@ class SchedulerRuntimeCheckerMixin:
             )
             self.stats.num_used_tokens = num_used
             self.stats.token_usage = round(token_usage, 2)
+            self.stats.num_streaming_sessions = self._active_streaming_session_count()
+            self.stats.streaming_session_held_tokens = self._session_held_tokens()
             self.stats.gen_throughput = 0
             self.stats.num_queue_reqs = QueueCount.from_reqs(
                 self.waiting_queue, priority_enabled
