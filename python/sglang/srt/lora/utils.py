@@ -79,8 +79,10 @@ def get_hidden_dim(
                 config.num_attention_heads + config.num_key_value_heads * 2
             )
         elif module_name == "o_proj":
+            # DSA/MLA models use v_head_dim for output projection input
+            v_head_dim = getattr(config, "v_head_dim", head_dim)
             return (
-                head_dim * config.num_attention_heads,
+                v_head_dim * config.num_attention_heads,
                 config.hidden_size,
             )
         elif module_name == "gate_up_proj":
