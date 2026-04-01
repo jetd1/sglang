@@ -11,8 +11,8 @@ from sglang.test.few_shot_gsm8k import run_eval
 from sglang.test.kits.matched_stop_kit import MatchedStopMixin
 from sglang.test.kits.radix_cache_server_kit import run_radix_attention_test
 from sglang.test.test_utils import (
-    DEFAULT_DRAFT_MODEL_EAGLE,
-    DEFAULT_TARGET_MODEL_EAGLE,
+    DEFAULT_DRAFT_MODEL_EAGLE3,
+    DEFAULT_TARGET_MODEL_EAGLE3,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
     DEFAULT_URL_FOR_TEST,
     CustomTestCase,
@@ -29,9 +29,9 @@ class TestEagleServerBase(CustomTestCase, MatchedStopMixin):
     spec_topk = 1
     spec_draft_tokens = 6
     page_size = 1
-    other_launch_args = []
-    model = DEFAULT_TARGET_MODEL_EAGLE
-    draft_model = DEFAULT_DRAFT_MODEL_EAGLE
+    other_launch_args = ["--dtype=float16"]
+    model = DEFAULT_TARGET_MODEL_EAGLE3
+    draft_model = DEFAULT_DRAFT_MODEL_EAGLE3
 
     @classmethod
     def setUpClass(cls):
@@ -53,7 +53,7 @@ class TestEagleServerBase(CustomTestCase, MatchedStopMixin):
             "--page-size",
             str(cls.page_size),
             "--mem-fraction-static",
-            "0.75",
+            "0.65",
             "--max-running-requests",
             str(cls.max_running_requests),
             "--cuda-graph-bs",
@@ -96,9 +96,7 @@ class TestEagleServerBase(CustomTestCase, MatchedStopMixin):
         )
         metrics = run_eval(args)
         print(f"TestEagleLargeBS -- {metrics=}")
-        self.assertGreater(
-            metrics["accuracy"], 0.23
-        )  # 0.3333 for 60 questions; 0.234 for 1319 questions
+        self.assertGreater(metrics["accuracy"], 0.62)
         assert self.process.poll() is None
 
     def test_logprob_spec_v2_match(self):
