@@ -86,8 +86,25 @@ def get_hidden_dim(
                 config.hidden_size,
             )
         elif module_name == "gate_up_proj":
+            # For MoE models with shared experts, layers >= first_k_dense_replace
+            # use moe_intermediate_size (or shared_expert_intermediate_size) instead
+            # of intermediate_size.
+            first_k = getattr(config, "first_k_dense_replace", 0)
+            if first_k > 0 and layer_idx >= first_k:
+                shared_inter = getattr(
+                    config, "shared_expert_intermediate_size",
+                    getattr(config, "moe_intermediate_size", config.intermediate_size),
+                )
+                return config.hidden_size, shared_inter * 2
             return config.hidden_size, config.intermediate_size * 2
         elif module_name == "down_proj":
+            first_k = getattr(config, "first_k_dense_replace", 0)
+            if first_k > 0 and layer_idx >= first_k:
+                shared_inter = getattr(
+                    config, "shared_expert_intermediate_size",
+                    getattr(config, "moe_intermediate_size", config.intermediate_size),
+                )
+                return shared_inter, config.hidden_size
             return config.intermediate_size, config.hidden_size
         elif module_name == "gate_up_proj_moe":
             return config.hidden_size, config.moe_intermediate_size * 2
