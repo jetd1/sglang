@@ -1768,8 +1768,11 @@ class NativeSparseAttnBackend(
             f"cu_seqlens_k has {len(cu_seqlens_k)-1} requests"
         )
 
-        # Use TRTLLm ragged attention for SM100 (Blackwell/B200) to avoid FA4 accuracy issues
-        if self.device_sm_major >= 10:
+        # Use TRTLLM ragged attention for SM100 to avoid FA4 accuracy issues.
+        # TODO(mmangkad): Revert this check back to `device_sm_major >= 10`
+        # once FlashInfer fixes TRTLLM attention on SM103.
+        # (G)B300 (SM103) hangs with TRTLLM attention at high concurrency.
+        if self.device_capability == (10, 0):
             import flashinfer
 
             seq_lens = metadata.cache_seqlens_int32

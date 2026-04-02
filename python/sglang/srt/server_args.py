@@ -56,6 +56,7 @@ from sglang.srt.utils.common import (
     is_npu,
     is_remote_url,
     is_sm90_supported,
+    is_sm100_exact,
     is_sm100_supported,
     is_sm120_supported,
     is_triton_kernels_available,
@@ -1602,7 +1603,7 @@ class ServerArgs:
                 if not self.disable_piecewise_cuda_graph:
                     logger.info("Piecewise CUDA graph is enabled, use MLA for prefill.")
 
-                if is_sm100_supported():
+                if is_sm100_exact():
                     if (
                         self.attention_backend is None
                         and self.prefill_attention_backend is None
@@ -1700,7 +1701,7 @@ class ServerArgs:
         elif model_arch in ["GptOssForCausalLM"]:
             # Set attention backend for GPT-OSS
             if self.is_attention_backend_not_set():
-                if is_sm100_supported():
+                if is_sm100_exact():
                     self.attention_backend = "trtllm_mha"
                 elif is_sm90_supported():
                     self.attention_backend = "fa3"
@@ -1838,7 +1839,7 @@ class ServerArgs:
         elif "Llama4" in model_arch and self.device != "cpu":
             # Auto-select attention backend for Llama4 if not specified
             if self.attention_backend is None:
-                if is_sm100_supported():
+                if is_sm100_exact():
                     self.attention_backend, platform = "trtllm_mha", "sm100"
                 elif is_sm90_supported():
                     self.attention_backend, platform = "fa3", "sm90"
@@ -1897,7 +1898,7 @@ class ServerArgs:
             self.disable_hybrid_swa_memory = True
 
             if self.attention_backend is None:
-                if is_cuda() and is_sm100_supported():
+                if is_cuda() and is_sm100_exact():
                     self.attention_backend = "trtllm_mha"
                 elif is_cuda() and get_device_sm() >= 80:
                     self.attention_backend = "fa3"
@@ -1983,7 +1984,7 @@ class ServerArgs:
                 "Qwen3_5ForConditionalGeneration",
             ]:
                 sm100_default_attn_backend = "triton"
-                if is_sm100_supported():
+                if is_sm100_exact():
                     # trtllm_mha requires speculative_eagle_topk == 1 and page_size > 1.
                     # _get_default_attn_backend handles the eagle_topk check.
                     # There is only one case where page_size=1 is required,
@@ -2131,7 +2132,7 @@ class ServerArgs:
         sm100_default_attention_backend: str = None,
     ):
         if (
-            is_sm100_supported()
+            is_sm100_exact()
             and self.attention_backend is None
             and sm100_default_attention_backend is not None
         ):
@@ -2245,7 +2246,7 @@ class ServerArgs:
                 # ref: https://github.com/sgl-project/sglang/issues/17411
                 return "fa3"
             elif (
-                is_sm100_supported()
+                is_sm100_exact()
                 and is_no_spec_infer_or_topk_one(self)
                 and (
                     self.speculative_algorithm is None
@@ -2373,9 +2374,11 @@ class ServerArgs:
                 if self.prefill_attention_backend is not None
                 else self.attention_backend
             )
-            if prefill_backend == "trtllm_mha" and not is_sm100_supported():
+            if prefill_backend == "trtllm_mha" and not is_sm100_exact():
                 raise ValueError(
-                    "TRTLLM MHA backend for prefill is only supported on Blackwell GPUs (SM100). Please use a different prefill backend."
+                    "TRTLLM MHA backend for prefill is only supported on SM100. "
+                    "(G)B300 (SM103) is not supported due to hangs at high concurrency. "
+                    "Please use a different prefill backend."
                 )
 
             # Check decode backend
@@ -2385,10 +2388,12 @@ class ServerArgs:
                 else self.attention_backend
             )
             if decode_backend == "trtllm_mha" and not (
-                is_sm90_supported() or is_sm100_supported() or is_sm120_supported()
+                is_sm90_supported() or is_sm100_exact() or is_sm120_supported()
             ):
                 raise ValueError(
-                    "TRTLLM MHA backend for decode is only supported on Hopper (SM90), Blackwell (SM100) and (SM120) GPUs. Please use a different decode backend."
+                    "TRTLLM MHA backend for decode is only supported on Hopper (SM90), SM100, and SM120 GPUs. "
+                    "(G)B300 (SM103) is not supported due to hangs at high concurrency. "
+                    "Please use a different decode backend."
                 )
 
             if self.page_size not in [16, 32, 64]:
