@@ -41,19 +41,17 @@ class TestPiecewiseCudaGraphQwen25VL(CustomTestCase):
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
 
-    def test_mgsm_accuracy(self):
-        num_examples = 2000
-
+    def test_gsm8k_accuracy(self):
         args = SimpleNamespace(
             base_url=self.base_url,
             model=self.model,
-            eval_name="mgsm_en",
-            num_examples=num_examples,
-            num_threads=min(num_examples, 1024),
+            eval_name="gsm8k",
+            num_examples=None,
+            num_threads=1024,
         )
 
         metrics = run_eval(args)
-        print(f"MGSM Accuracy: {metrics['score']:.3f}")
+        print(f"GSM8K Accuracy: {metrics['score']:.3f}")
 
         self.assertGreaterEqual(metrics["score"], 0.70)
 
@@ -79,19 +77,17 @@ class TestPiecewiseCudaGraphInternVL25(CustomTestCase):
     def tearDownClass(cls):
         kill_process_tree(cls.process.pid)
 
-    def test_mgsm_accuracy(self):
-        num_examples = 2000
-
+    def test_gsm8k_accuracy(self):
         args = SimpleNamespace(
             base_url=self.base_url,
             model=self.model,
-            eval_name="mgsm_en",
-            num_examples=num_examples,
-            num_threads=min(num_examples, 1024),
+            eval_name="gsm8k",
+            num_examples=None,
+            num_threads=1024,
         )
 
         metrics = run_eval(args)
-        print(f"MGSM Accuracy: {metrics['score']:.3f}")
+        print(f"GSM8K Accuracy: {metrics['score']:.3f}")
 
         self.assertGreaterEqual(metrics["score"], 0.70)
 

@@ -1,7 +1,7 @@
 """
 AMD GSM8K Evaluation Test (Migrated from test/srt/nightly/)
 
-This test evaluates instruction-tuned models on the mgsm_en benchmark using chat completions.
+This test evaluates instruction-tuned models on the gsm8k benchmark using chat completions.
 Models are tested with various TP configurations on AMD GPUs.
 
 Registry: nightly-amd suite (2-GPU tests)
@@ -185,7 +185,7 @@ def check_model_scores(results):
         summary += line
 
     print(f"\n{'='*60}")
-    print("SUMMARY - TP=2 Instruction Models (mgsm_en)")
+    print("SUMMARY - TP=2 Instruction Models (gsm8k)")
     print(f"{'='*60}")
     print(summary)
     print(f"\n📊 Final Statistics:")
@@ -200,7 +200,7 @@ def check_model_scores(results):
         raise AssertionError(f"The following models failed:\n{failure_msg}")
 
 
-# Do not use `CustomTestCase` since `test_mgsm_en_all_models` does not want retry
+# Do not use `CustomTestCase` since `test_gsm8k_all_models` does not want retry
 class TestNightlyGsm8KEval(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -215,7 +215,7 @@ class TestNightlyGsm8KEval(unittest.TestCase):
         ]
         cls.base_url = DEFAULT_URL_FOR_TEST
 
-    def test_mgsm_en_all_models(self):
+    def test_gsm8k_all_models(self):
         warnings.filterwarnings(
             "ignore", category=ResourceWarning, message="unclosed.*socket"
         )
@@ -226,7 +226,7 @@ class TestNightlyGsm8KEval(unittest.TestCase):
         print(f"\n{'='*60}")
         print("AMD GSM8K Evaluation Test (TP=2 Instruction Models)")
         print(f"{'='*60}")
-        print(f"Benchmark: mgsm_en (chat completions)")
+        print(f"Benchmark: gsm8k (chat completions)")
         print(f"{'='*60}\n")
 
         for model_group, is_fp8, is_tp2 in self.model_groups:
@@ -261,13 +261,13 @@ class TestNightlyGsm8KEval(unittest.TestCase):
                     args = SimpleNamespace(
                         base_url=self.base_url,
                         model=model,
-                        eval_name="mgsm_en",
+                        eval_name="gsm8k",
                         num_examples=None,
                         num_threads=1024,
                     )
 
                     # Run eval with timing and retries
-                    print(f"📊 Running mgsm_en evaluation...")
+                    print(f"📊 Running gsm8k evaluation...")
                     eval_start = time.time()
                     threshold = MODEL_SCORE_THRESHOLDS.get(model)
                     metrics = None

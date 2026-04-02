@@ -93,7 +93,7 @@ class TestNightlyGsm8KEval(unittest.TestCase):
         ]
         cls.base_url = DEFAULT_URL_FOR_TEST
 
-    def test_mgsm_en_all_models(self):
+    def test_gsm8k_all_models(self):
         warnings.filterwarnings(
             "ignore", category=ResourceWarning, message="unclosed.*socket"
         )
@@ -110,7 +110,7 @@ class TestNightlyGsm8KEval(unittest.TestCase):
                     args = SimpleNamespace(
                         base_url=self.base_url,
                         model=model,
-                        eval_name="mgsm_en",
+                        eval_name="gsm8k",
                         num_examples=None,
                         num_threads=1024,
                     )
