@@ -2381,7 +2381,7 @@ class ServerArgs:
             ):
                 raise ValueError(
                     "TRTLLM MHA backend for prefill is only supported on SM100. "
-                    "(G)B300 (SM103) is not supported due to hangs at high concurrency. "
+                    "(G)B300 (SM103) is temporarily disabled due to hangs at high concurrency. "
                     "Please use a different prefill backend."
                 )
 
@@ -2398,7 +2398,7 @@ class ServerArgs:
             ):
                 raise ValueError(
                     "TRTLLM MHA backend for decode is only supported on Hopper (SM90), SM100, and SM120 GPUs. "
-                    "(G)B300 (SM103) is not supported due to hangs at high concurrency. "
+                    "(G)B300 (SM103) is temporarily disabled due to hangs at high concurrency. "
                     "Please use a different decode backend."
                 )
 
