@@ -276,7 +276,7 @@ is_sm100_supported = lru_cache(maxsize=1)(
 # TODO(mmangkad): Remove the TRTLLM attention skips for SM103 once FlashInfer
 # ships a fix. Tracking: https://github.com/flashinfer-ai/flashinfer/issues/2939
 is_sm103_supported = lru_cache(maxsize=1)(
-    partial(_check_cuda_device_exact, device_capability=(10, 3), cuda_version=(12, 8))
+    partial(_check_cuda_device_exact, device_capability=(10, 3), cuda_version=(13, 0))
 )
 is_sm90_supported = lru_cache(maxsize=1)(
     partial(
