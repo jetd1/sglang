@@ -27,7 +27,7 @@ try:
 except ImportError:
     _HAS_GRANIAN = False
 
-register_cuda_ci(est_time=120, suite="stage-b-test-small-1-gpu")
+register_cuda_ci(est_time=120, suite="stage-b-test-1-gpu-small")
 
 
 @unittest.skipUnless(_HAS_GRANIAN, "granian not installed (pip install sglang[http2])")
