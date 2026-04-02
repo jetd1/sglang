@@ -273,12 +273,10 @@ is_sm100_supported = lru_cache(maxsize=1)(
         _check_cuda_device_version, device_capability_majors=[10], cuda_version=(12, 8)
     )
 )
-# TODO(mmangkad): Remove is_sm100_exact and switch all callers back to
-# is_sm100_supported once FlashInfer fixes TRTLLM attention on SM103.
-# Tracking: https://github.com/flashinfer-ai/flashinfer/issues/2939
-# (G)B300 (SM103) hangs with TRTLLM attention at high concurrency.
-is_sm100_exact = lru_cache(maxsize=1)(
-    partial(_check_cuda_device_exact, device_capability=(10, 0), cuda_version=(12, 8))
+# TODO(mmangkad): Remove the TRTLLM attention skips for SM103 once FlashInfer
+# ships a fix. Tracking: https://github.com/flashinfer-ai/flashinfer/issues/2939
+is_sm103_supported = lru_cache(maxsize=1)(
+    partial(_check_cuda_device_exact, device_capability=(10, 3), cuda_version=(12, 8))
 )
 is_sm90_supported = lru_cache(maxsize=1)(
     partial(

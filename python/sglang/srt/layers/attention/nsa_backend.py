@@ -1772,7 +1772,7 @@ class NativeSparseAttnBackend(
         # TODO(mmangkad): Revert this check back to `device_sm_major >= 10`
         # once FlashInfer fixes TRTLLM attention on SM103.
         # (G)B300 (SM103) hangs with TRTLLM attention at high concurrency.
-        if self.device_capability == (10, 0):
+        if self.device_sm_major >= 10 and self.device_capability != (10, 3):
             import flashinfer
 
             seq_lens = metadata.cache_seqlens_int32
