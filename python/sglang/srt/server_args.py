@@ -1460,8 +1460,13 @@ class ServerArgs:
             self.nsa_decode_backend = "tilelang"
         elif kv_cache_dtype == "fp8_e4m3":
             if major >= 10:
-                self.nsa_prefill_backend = "trtllm"
-                self.nsa_decode_backend = "trtllm"
+                # TODO: Set sm103 default to trtllm after the hanging bug is fixed (#21904)
+                if is_sm103_supported():
+                    self.nsa_prefill_backend = "flashmla_sparse"
+                    self.nsa_decode_backend = "flashmla_kv"
+                else:
+                    self.nsa_prefill_backend = "trtllm"
+                    self.nsa_decode_backend = "trtllm"
             else:
                 # flashmla_auto dispatches to flashmla_sparse/flashmla_kv based on hardware and heuristics
                 if not user_set_prefill:
