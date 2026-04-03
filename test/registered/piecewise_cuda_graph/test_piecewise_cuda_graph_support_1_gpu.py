@@ -89,7 +89,11 @@ class TestPiecewiseCudaGraphInternVL25(CustomTestCase):
         metrics = run_eval(args)
         print(f"GSM8K Accuracy: {metrics['score']:.3f}")
 
-        self.assertGreaterEqual(metrics["score"], 0.70)
+        # Baseline (no piecewise CUDA graph): 0.571 — this eval uses 5-shot
+        # concatenated text via chat API, which scores lower than reported
+        # benchmarks (~77.8%) that use proper CoT chat format. The threshold
+        # is set 5% below observed to catch catastrophic regressions.
+        self.assertGreaterEqual(metrics["score"], 0.54)
 
 
 class TestPiecewiseCudaGraphQwen25VLEmbedding(CustomTestCase):
