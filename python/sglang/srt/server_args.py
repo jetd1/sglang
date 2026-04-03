@@ -52,6 +52,7 @@ from sglang.srt.utils.common import (
     is_hip,
     is_hopper_with_cuda_12_3,
     is_mps,
+    is_musa,
     is_no_spec_infer_or_topk_one,
     is_npu,
     is_remote_url,
@@ -1424,15 +1425,10 @@ class ServerArgs:
             )
 
         if self.kv_cache_dtype == "auto":
-            # TODO: Temporarily set default dtype on B200 as bfloat16 to avoid performance regression.
-            # TODO: Remove this after the performance regression is fixed. (Ref: https://github.com/sgl-project/sglang/issues/21291)
-            if quantization == "modelopt_fp4" and major >= 10 and self.dp_size > 1:
+            if major >= 10:
                 self.kv_cache_dtype = "fp8_e4m3"
             else:
                 self.kv_cache_dtype = "bfloat16"
-            # self.kv_cache_dtype = (
-            #     "fp8_e4m3" if (major >= 10 and self.dp_size > 1) else "bfloat16"
-            # )
             logger.warning(
                 f"Setting KV cache dtype to {self.kv_cache_dtype} for DeepSeek DSA on SM{major} device."
             )
@@ -1463,7 +1459,7 @@ class ServerArgs:
             self.nsa_prefill_backend = "tilelang"
             self.nsa_decode_backend = "tilelang"
         elif kv_cache_dtype == "fp8_e4m3":
-            if self.dp_size == 1 and major >= 10:
+            if major >= 10:
                 self.nsa_prefill_backend = "trtllm"
                 self.nsa_decode_backend = "trtllm"
             else:
@@ -2416,6 +2412,13 @@ class ServerArgs:
         if self.attention_backend == "aiter":
             if model_config.context_len > 8192:
                 self.mem_fraction_static *= 0.85
+
+        # MUSA platforms compatible backends
+        if is_musa() and self.attention_backend == "fa3":
+            logger.warning(
+                "FA3 attention backend on MUSA ignores any user-provided page_size and enforces a fixed value of 64."
+            )
+            self.page_size = 64
 
         # Other platforms backends
         if (
