@@ -26,7 +26,7 @@ class ReasoningTokenUsageMixin:
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": "What is 1+3?"}],
-            "max_tokens": 64,
+            "max_tokens": 1024,
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
         if stream:
@@ -39,8 +39,8 @@ class ReasoningTokenUsageMixin:
             stream=stream,
         )
 
-    def _extract_streaming_reasoning_tokens(self, response):
-        reasoning_tokens = None
+    def _extract_streaming_usage(self, response):
+        usage = None
         for line in response.iter_lines():
             if not line:
                 continue
@@ -48,17 +48,18 @@ class ReasoningTokenUsageMixin:
             if not decoded.startswith("data:") or decoded.startswith("data: [DONE]"):
                 continue
             data = json.loads(decoded[len("data:") :].strip())
-            usage = data.get("usage")
-            if usage and "reasoning_tokens" in usage:
-                reasoning_tokens = usage["reasoning_tokens"]
-        return reasoning_tokens
+            if data.get("usage"):
+                usage = data["usage"]
+        return usage
 
     # -- non-streaming tests --
 
     def test_reasoning_tokens_thinking(self):
         resp = self._reasoning_chat_request(enable_thinking=True)
         self.assertEqual(resp.status_code, 200, resp.text)
-        self.assertGreater(resp.json()["usage"]["reasoning_tokens"], 0)
+        usage = resp.json()["usage"]
+        self.assertGreater(usage["reasoning_tokens"], 0)
+        self.assertLess(usage["reasoning_tokens"], usage["completion_tokens"])
 
     def test_reasoning_tokens_non_thinking(self):
         resp = self._reasoning_chat_request(enable_thinking=False)
@@ -70,13 +71,14 @@ class ReasoningTokenUsageMixin:
     def test_reasoning_tokens_thinking_stream(self):
         with self._reasoning_chat_request(enable_thinking=True, stream=True) as resp:
             self.assertEqual(resp.status_code, 200, resp.text)
-            rt = self._extract_streaming_reasoning_tokens(resp)
-            self.assertIsNotNone(rt, "No usage with reasoning_tokens in stream")
-            self.assertGreater(rt, 0)
+            usage = self._extract_streaming_usage(resp)
+            self.assertIsNotNone(usage, "No usage in stream")
+            self.assertGreater(usage["reasoning_tokens"], 0)
+            self.assertLess(usage["reasoning_tokens"], usage["completion_tokens"])
 
     def test_reasoning_tokens_non_thinking_stream(self):
         with self._reasoning_chat_request(enable_thinking=False, stream=True) as resp:
             self.assertEqual(resp.status_code, 200, resp.text)
-            rt = self._extract_streaming_reasoning_tokens(resp)
-            self.assertIsNotNone(rt, "No usage with reasoning_tokens in stream")
-            self.assertEqual(rt, 0)
+            usage = self._extract_streaming_usage(resp)
+            self.assertIsNotNone(usage, "No usage in stream")
+            self.assertEqual(usage["reasoning_tokens"], 0)
