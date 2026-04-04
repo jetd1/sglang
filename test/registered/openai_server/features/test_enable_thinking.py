@@ -13,6 +13,7 @@ import requests
 
 from sglang.srt.utils import kill_process_tree
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.kits.reasoning_tokens_kit import ReasoningTokenUsageMixin
 from sglang.test.test_utils import (
     DEFAULT_ENABLE_THINKING_MODEL_NAME_FOR_TEST,
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -25,7 +26,7 @@ register_cuda_ci(est_time=103, suite="stage-b-test-1-gpu-large")
 register_amd_ci(est_time=200, suite="stage-b-test-1-gpu-small-amd")
 
 
-class TestEnableThinking(CustomTestCase):
+class TestEnableThinking(ReasoningTokenUsageMixin, CustomTestCase):
     @classmethod
     def setUpClass(cls):
         cls.model = DEFAULT_ENABLE_THINKING_MODEL_NAME_FOR_TEST
