@@ -68,15 +68,15 @@ class ReasoningTokenUsageMixin:
     # -- streaming tests --
 
     def test_reasoning_tokens_thinking_stream(self):
-        resp = self._reasoning_chat_request(enable_thinking=True, stream=True)
-        self.assertEqual(resp.status_code, 200)
-        rt = self._extract_streaming_reasoning_tokens(resp)
-        self.assertIsNotNone(rt, "No usage with reasoning_tokens in stream")
-        self.assertGreater(rt, 0)
+        with self._reasoning_chat_request(enable_thinking=True, stream=True) as resp:
+            self.assertEqual(resp.status_code, 200, resp.text)
+            rt = self._extract_streaming_reasoning_tokens(resp)
+            self.assertIsNotNone(rt, "No usage with reasoning_tokens in stream")
+            self.assertGreater(rt, 0)
 
     def test_reasoning_tokens_non_thinking_stream(self):
-        resp = self._reasoning_chat_request(enable_thinking=False, stream=True)
-        self.assertEqual(resp.status_code, 200)
-        rt = self._extract_streaming_reasoning_tokens(resp)
-        self.assertIsNotNone(rt, "No usage with reasoning_tokens in stream")
-        self.assertEqual(rt, 0)
+        with self._reasoning_chat_request(enable_thinking=False, stream=True) as resp:
+            self.assertEqual(resp.status_code, 200, resp.text)
+            rt = self._extract_streaming_reasoning_tokens(resp)
+            self.assertIsNotNone(rt, "No usage with reasoning_tokens in stream")
+            self.assertEqual(rt, 0)
