@@ -27,11 +27,14 @@ register_amd_ci(est_time=200, suite="stage-b-test-1-gpu-small-amd")
 
 
 class TestEnableThinking(ReasoningTokenUsageMixin, CustomTestCase):
+    reasoning_parser_name = "qwen3"
+
     @classmethod
     def setUpClass(cls):
         cls.model = DEFAULT_ENABLE_THINKING_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.api_key = "sk-1234"
+        cls.init_reasoning_token_verifier()
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,

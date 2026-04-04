@@ -84,10 +84,13 @@ class TestQwen35FP4(unittest.TestCase):
 
 
 class TestQwen35FP4MTP(ReasoningTokenUsageMixin, CustomTestCase):
+    reasoning_parser_name = "qwen3"
+
     @classmethod
     def setUpClass(cls):
         cls.model = QWEN35_FP4_MODEL
         cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.init_reasoning_token_verifier()
         cls.process = popen_launch_server(
             cls.model,
             cls.base_url,
@@ -159,10 +162,13 @@ class TestQwen35FP4MTP(ReasoningTokenUsageMixin, CustomTestCase):
 
 
 class TestQwen35FP4MTPV2(ReasoningTokenUsageMixin, CustomTestCase):
+    reasoning_parser_name = "qwen3"
+
     @classmethod
     def setUpClass(cls):
         cls.model = QWEN35_FP4_MODEL
         cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.init_reasoning_token_verifier()
         envs.SGLANG_ENABLE_SPEC_V2.set(True)
         cls.process = popen_launch_server(
             cls.model,
