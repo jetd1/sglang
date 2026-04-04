@@ -26,7 +26,7 @@ class ReasoningTokenUsageMixin:
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": "What is 1+3?"}],
-            "max_tokens": 1024,
+            "max_tokens": 64,
             "chat_template_kwargs": {"enable_thinking": enable_thinking},
         }
         if stream:
