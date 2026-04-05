@@ -611,7 +611,8 @@ class AnthropicServing:
                     delta_event.model_dump_json(exclude_none=True),
                     "content_block_delta",
                 )
-                continue
+                # Do NOT continue here - allow transition logic to run
+                # in case the same chunk has both reasoning_content and content/tool_calls
 
             # Close thinking block when transitioning to non-thinking content
             if thinking_block_open and (
