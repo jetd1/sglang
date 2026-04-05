@@ -713,6 +713,8 @@ class DenoisingStage(PipelineStage):
         trajectory_timesteps: list,
         server_args: ServerArgs,
         is_warmup: bool = False,
+        *args,
+        **kwargs,
     ):
         # Gather results if using sequence parallelism
         if trajectory_latents:
