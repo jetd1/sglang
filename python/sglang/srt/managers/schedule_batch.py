@@ -1111,6 +1111,24 @@ class Req(ReqDllmMixin):
         if self._check_str_based_finish():
             return
 
+    def record_cache_breakdown(self):
+        """Record the HiCache device/host/storage breakdown of the cache hit.
+
+        Expects to be called at most once per request (guard with
+        `_cache_breakdown_computed` at the call site) — subsequent chunks in
+        chunked prefill would otherwise miscount previously-computed tokens.
+        """
+        host_total = self.host_hit_length
+        # Clamp storage to host_total to handle edge cases
+        storage_portion = min(host_total, self.storage_hit_length)
+        host_portion = host_total - storage_portion
+        device_portion = max(0, len(self.prefix_indices) - host_total)
+
+        self.cached_tokens_device = device_portion
+        self.cached_tokens_host = host_portion
+        self.cached_tokens_storage = storage_portion
+        self._cache_breakdown_computed = True
+
     def reset_for_retract(self):
         # Increment retraction count before resetting other state. We should not reset this
         # since we are tracking the total number of retractions for each request.
@@ -1558,61 +1576,44 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             multimodal_inputs.append(req.multimodal_inputs)
 
             # Only calculate cached_tokens once. Once retracted, the 'retracted_stain'
-            # flag will always True.
+            # flag will always be True.
             #
             # NOTE on EAGLE + --enable-cache-report: the scheduler log's
             # `#cached-token` counter (log_hit_tokens in schedule_policy) and
             # the per-request `req.cached_tokens` are tracked independently.
             # The per-request value is what flows into the OpenAI API response
             # via meta_info["cached_tokens"] -> usage.prompt_tokens_details.
-            # Keep the accumulation below guarded by retracted_stain so re-prefill
-            # after retraction doesn't double-count; but always compute
-            # `new_cached` up-front so we can apply a safety net further down.
+            # Accumulate only when not retracted to avoid double-counting on
+            # re-prefill; a narrow safety net covers the EAGLE case where a
+            # resumed request arrives here with cached_tokens still at 0.
             new_cached = pre_len - req.already_computed
             if not req.retracted_stain:
                 req.cached_tokens += new_cached
-
-                # Calculate detailed breakdown of cached tokens by source (for HiCache)
-                # Only compute once on FIRST chunk - subsequent chunks in chunked prefill
-                # would incorrectly count previously computed tokens as cache hits.
                 if not req._cache_breakdown_computed:
-                    # At this point, prefix_indices has been extended with host data
-                    # via init_load_back in schedule_policy, so:
-                    # - len(prefix_indices) = device_original + host_loaded
-                    # - host_hit_length = total tokens from host cache (including storage-prefetched)
-                    # - storage_hit_length = tokens loaded from storage backend (L3 hits)
-                    # - device_portion = len(prefix_indices) - host_hit_length
-                    #
-                    # Storage hits are now tracked via scheduler after prefetch completes.
-                    # storage_hit_length is set by scheduler.pop_prefetch_loaded_tokens()
-                    host_total = req.host_hit_length
-                    # Clamp storage to host_total to handle edge cases
-                    storage_portion = min(host_total, req.storage_hit_length)
-                    host_portion = host_total - storage_portion
-                    device_portion = max(0, len(req.prefix_indices) - host_total)
-
-                    req.cached_tokens_device = device_portion
-                    req.cached_tokens_host = host_portion
-                    req.cached_tokens_storage = storage_portion
-                    req._cache_breakdown_computed = True
-
-                req.already_computed = seq_len
+                    # prefix_indices has been extended with host data via
+                    # init_load_back in schedule_policy at this point.
+                    req.record_cache_breakdown()
             elif req.cached_tokens == 0 and new_cached > 0:
                 # Safety net for EAGLE speculative decoding + --enable-cache-report:
-                # when cached_tokens has never been populated but the radix cache
-                # has a prefix hit for this request, populate it now. This fixes
-                # the case where the API response reports cached_tokens=0 despite
-                # the scheduler log showing a non-zero `#cached-token`.
+                # when a retracted request resumes with cached_tokens still at
+                # 0 but the radix cache has a prefix hit, populate it now.
+                # Because `already_computed` is advanced unconditionally below,
+                # this branch only fires on the first resume chunk with a real
+                # hit — chunk-2+ of a chunked resume will see new_cached == 0
+                # and skip, so computed-but-not-cached tokens are never
+                # mis-reported as cache hits.
                 req.cached_tokens = new_cached
                 if not req._cache_breakdown_computed:
-                    host_total = req.host_hit_length
-                    storage_portion = min(host_total, req.storage_hit_length)
-                    host_portion = host_total - storage_portion
-                    device_portion = max(0, len(req.prefix_indices) - host_total)
-                    req.cached_tokens_device = device_portion
-                    req.cached_tokens_host = host_portion
-                    req.cached_tokens_storage = storage_portion
-                    req._cache_breakdown_computed = True
+                    req.record_cache_breakdown()
+
+            # Advance `already_computed` unconditionally. Previously this only
+            # ran on the non-retracted path, which left it stale at 0 across
+            # all chunks of a resumed request. With chunked prefill that made
+            # `new_cached = pre_len` on every chunk of a resume (since
+            # prefix_indices grows with each chunk via cache_unfinished_req),
+            # which would otherwise cause the safety net above to report
+            # chunk-progress tokens as cache hits.
+            req.already_computed = seq_len
             req.is_retracted = False
 
             if get_global_server_args().enable_mamba_extra_buffer():
