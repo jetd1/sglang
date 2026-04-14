@@ -1558,9 +1558,18 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             multimodal_inputs.append(req.multimodal_inputs)
 
             # Only calculate cached_tokens once. Once retracted, the 'retracted_stain'
-            # flag will always True
+            # flag will always True.
+            #
+            # NOTE on EAGLE + --enable-cache-report: the scheduler log's
+            # `#cached-token` counter (log_hit_tokens in schedule_policy) and
+            # the per-request `req.cached_tokens` are tracked independently.
+            # The per-request value is what flows into the OpenAI API response
+            # via meta_info["cached_tokens"] -> usage.prompt_tokens_details.
+            # Keep the accumulation below guarded by retracted_stain so re-prefill
+            # after retraction doesn't double-count; but always compute
+            # `new_cached` up-front so we can apply a safety net further down.
+            new_cached = pre_len - req.already_computed
             if not req.retracted_stain:
-                new_cached = pre_len - req.already_computed
                 req.cached_tokens += new_cached
 
                 # Calculate detailed breakdown of cached tokens by source (for HiCache)
@@ -1588,6 +1597,22 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
                     req._cache_breakdown_computed = True
 
                 req.already_computed = seq_len
+            elif req.cached_tokens == 0 and new_cached > 0:
+                # Safety net for EAGLE speculative decoding + --enable-cache-report:
+                # when cached_tokens has never been populated but the radix cache
+                # has a prefix hit for this request, populate it now. This fixes
+                # the case where the API response reports cached_tokens=0 despite
+                # the scheduler log showing a non-zero `#cached-token`.
+                req.cached_tokens = new_cached
+                if not req._cache_breakdown_computed:
+                    host_total = req.host_hit_length
+                    storage_portion = min(host_total, req.storage_hit_length)
+                    host_portion = host_total - storage_portion
+                    device_portion = max(0, len(req.prefix_indices) - host_total)
+                    req.cached_tokens_device = device_portion
+                    req.cached_tokens_host = host_portion
+                    req.cached_tokens_storage = storage_portion
+                    req._cache_breakdown_computed = True
             req.is_retracted = False
 
             if get_global_server_args().enable_mamba_extra_buffer():
