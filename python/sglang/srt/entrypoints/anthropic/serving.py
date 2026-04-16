@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from typing import TYPE_CHECKING, AsyncGenerator, Optional, Union
@@ -42,6 +43,66 @@ if TYPE_CHECKING:
     from sglang.srt.entrypoints.openai.serving_chat import OpenAIServingChat
 
 logger = logging.getLogger(__name__)
+
+# Cap decoded document size to bound PDF parsing work on the async event loop.
+_MAX_DOC_BYTES = int(
+    os.environ.get("SGLANG_ANTHROPIC_MAX_DOC_BYTES", 10 * 1024 * 1024)
+)
+
+
+def _extract_document_text(item: dict) -> str:
+    """Extract text from a document content block (e.g. PDF).
+
+    Claude Code sends PDF files as base64-encoded document blocks.
+    We decode and extract text so self-hosted models can understand them.
+    """
+    source = item.get("source") or {}
+    if not isinstance(source, dict):
+        return ""
+
+    media_type = source.get("media_type", "")
+    data_b64 = source.get("data", "")
+
+    if not data_b64:
+        return ""
+
+    # base64 encodes 3 bytes as 4 chars; reject oversize payloads before decoding.
+    if len(data_b64) > (_MAX_DOC_BYTES * 4 // 3) + 4:
+        logger.warning(
+            "Document payload exceeds %d bytes (SGLANG_ANTHROPIC_MAX_DOC_BYTES); skipping extraction",
+            _MAX_DOC_BYTES,
+        )
+        return ""
+
+    try:
+        import base64
+
+        raw = base64.b64decode(data_b64)
+    except Exception:
+        return ""
+
+    if media_type == "application/pdf":
+        try:
+            from io import BytesIO
+            from pypdf import PdfReader
+
+            reader = PdfReader(BytesIO(raw))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+            return "\n\n".join(pages) if pages else ""
+        except Exception as e:
+            logger.warning("Failed to extract PDF text: %s", e)
+            return ""
+
+    # For other document types, try UTF-8 decode as fallback
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
 
 # Map OpenAI finish reasons to Anthropic stop reasons
 STOP_REASON_MAP = {
@@ -146,6 +207,11 @@ class AnthropicServing:
                         )
                         if image_part is not None:
                             tool_content_parts.append(image_part)
+                    elif item_type == "document":
+                        doc_text = _extract_document_text(item)
+                        if doc_text:
+                            tool_text_parts.append(doc_text)
+                            tool_content_parts.append({"type": "text", "text": doc_text})
 
                 tool_text = "\n".join(tool_text_parts)
                 if (
@@ -195,6 +261,11 @@ class AnthropicServing:
                     )
                     if image_part is not None:
                         content_parts.append(image_part)
+
+                elif block.type == "document":
+                    doc_text = _extract_document_text({"source": block.source} if block.source else {})
+                    if doc_text:
+                        content_parts.append({"type": "text", "text": doc_text})
 
                 elif block.type == "tool_use":
                     tool_call = {

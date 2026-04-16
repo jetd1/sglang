@@ -78,6 +78,7 @@ dependencies = [
   "xgrammar==0.1.32",
   "smg-grpc-servicer>=0.5.0",
   "kernels",
+  "pypdf",
 ]
 
 [[tool.uv.index]]

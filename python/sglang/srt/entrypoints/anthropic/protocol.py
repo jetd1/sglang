@@ -33,7 +33,7 @@ class AnthropicContentBlock(BaseModel):
     """Content block in message"""
 
     type: Literal[
-        "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"
+        "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking", "document"
     ]
     text: Optional[str] = None
     # For image content
