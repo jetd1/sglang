@@ -1065,11 +1065,19 @@ class ReasoningParser:
             If True, streams reasoning content as it arrives.
     """
 
+    # DeepSeek-V4 carves DSML tool-call markup out of <think>...</think>
+    # so an inline tool call routes through the FunctionCallParser without
+    # waiting for the thinking span to close. See
+    # parser/reasoning_parser_dsml_aware.py for the full rationale.
+    from sglang.srt.parser.reasoning_parser_dsml_aware import (
+        DeepSeekV4ReasoningDetector as _DeepSeekV4ReasoningDetector,
+    )
+
     DetectorMap: Dict[str, Type[BaseReasoningFormatDetector]] = {
         "apertus2509": Apertus2509Detector,
         "deepseek-r1": DeepSeekR1Detector,
         "deepseek-v3": _DeepSeekV3Detector,
-        "deepseek-v4": _DeepSeekV3Detector,
+        "deepseek-v4": _DeepSeekV4ReasoningDetector,
         "glm45": Glm45Detector,
         "hunyuan": HunyuanDetector,
         "gpt-oss": GptOssDetector,
