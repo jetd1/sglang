@@ -280,6 +280,33 @@ class DeepSeekV4ReasoningDetector(Qwen3Detector):
 
     # ------------------------------------------------------------------
     @staticmethod
+    def finish(self) -> StreamingParseResult:
+        """End-of-stream DSML flush guard.
+
+        When the backend packs finish_reason into the same chunk as the
+        closing </｜DSML｜tool_calls>, parse_streaming_increment can still
+        hold a complete DSML pair in _buffer. Carve it out here so the
+        FunctionCallParser sees the tool call instead of the pair being
+        dropped with the buffer. Anything else defers to Qwen3Detector's
+        normal finish semantics.
+        """
+        buf = self._buffer or ""
+        if buf and _DSML_TOOL_CALL_START in buf and _DSML_TOOL_CALL_END in buf:
+            try:
+                reasoning_part, normal_part = self._carve_dsml(buf)
+            except Exception:
+                reasoning_part = normal_part = None
+            if reasoning_part is not None or normal_part is not None:
+                self._buffer = ""
+                self._pending_reasoning = ""
+                self._pending_header = ""
+                self._kind = None
+                return StreamingParseResult(
+                    reasoning_text=reasoning_part or None,
+                    normal_text=normal_part or None,
+                )
+        return super().finish()
+
     def _carve_dsml(text: str) -> tuple[str, str]:
         """Split `text` (a finalized reasoning slice) into (reasoning_part,
         normal_part) by carving out any complete DSML tool_call blocks.
