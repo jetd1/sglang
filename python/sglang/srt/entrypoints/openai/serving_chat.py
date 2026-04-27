@@ -1210,7 +1210,44 @@ class OpenAIServingChat(OpenAIServingBase):
                 is_force_reasoning,
             )
         reasoning_parser = reasoning_parser_dict[index]
-        return reasoning_parser.parse_stream_chunk(delta)
+        reasoning_text, delta_out = reasoning_parser.parse_stream_chunk(delta)
+
+        # End-of-stream flush guard for DeepSeek-V4's DSML carve detector.
+        # When SGLang sets finish_reason in the same backend chunk as the
+        # closing </｜DSML｜tool_calls>, the detector buffer can still hold a
+        # complete DSML pair that would otherwise be dropped. Carve it out
+        # so the FunctionCallParser sees the tool call.
+        try:
+            finish = (content.get("meta_info") or {}).get("finish_reason")
+        except Exception:
+            finish = None
+        if finish is not None:
+            from sglang.srt.parser.reasoning_parser_dsml_aware import (
+                DeepSeekV4ReasoningDetector,
+                _DSML_TOOL_CALL_END,
+                _DSML_TOOL_CALL_START,
+            )
+
+            detector = getattr(reasoning_parser, "detector", None)
+            if isinstance(detector, DeepSeekV4ReasoningDetector):
+                buf = getattr(detector, "_buffer", "") or ""
+                if (
+                    buf
+                    and _DSML_TOOL_CALL_START in buf
+                    and _DSML_TOOL_CALL_END in buf
+                ):
+                    try:
+                        reasoning_part, normal_part = detector._carve_dsml(buf)
+                    except Exception:
+                        reasoning_part = normal_part = None
+                    if reasoning_part is not None or normal_part is not None:
+                        detector._buffer = ""
+                        if reasoning_part:
+                            reasoning_text = (reasoning_text or "") + reasoning_part
+                        if normal_part:
+                            delta_out = (delta_out or "") + normal_part
+
+        return reasoning_text, delta_out
 
     def _get_history_tool_calls_cnt(self, request: ChatCompletionRequest) -> int:
         """Counts the number of tool calls in the request's message history.
