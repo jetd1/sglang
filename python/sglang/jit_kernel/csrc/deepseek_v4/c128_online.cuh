@@ -132,20 +132,28 @@ __global__ void flash_c128_online_decode(const __grid_constant__ Compress128Onli
   const auto kv_score_input = static_cast<const float*>(params.kv_score_input);
   const auto kv_src = kv_score_input + batch_id * (kHeadDim * 2);
 
+  /// NOTE: kv_score_buffer layout is [max, sum, kv] (slot 0 / 1 / 2). Reads,
+  /// writes, and the prefill kernel must all agree on this order.
   const auto max_score_vec = gmem.load(kv_buf, 0);
   const auto sum_score_vec = gmem.load(kv_buf, 1);
   const auto old_kv_vec = gmem.load(kv_buf, 2);
 
-  const auto new_score_raw_vec = gmem.load(kv_src, 0);
-  const auto new_kv_vec = gmem.load(kv_src, 1);
+  /// NOTE: kv_score_input layout is | kv | score | (head_dim each), matching
+  /// the offline c128 kernel and the online prefill kernel.
+  const auto new_kv_vec = gmem.load(kv_src, 0);
+  const auto new_score_raw_vec = gmem.load(kv_src, 1);
 
-  const auto offset = seq_len % 128;
-  const auto bias_vec = gmem.load(params.score_bias, offset);
+  /// NOTE: the new token sits at global position `seq_len - 1`, so its
+  /// position inside the 128-chunk is `(seq_len - 1) % 128`. The previous
+  /// `seq_len % 128` was off by one (`bias[127]` vs `bias[0]`, etc.).
+  const auto pos_in_chunk = (seq_len - 1) % 128;
+  const auto bias_vec = gmem.load(params.score_bias, pos_in_chunk);
 
-  if (offset != 1) {  // NOTE: position = seq_len - 1, position % 128 == 0
-    Vec out_kv_vec;
-    Vec out_max_vec;
-    Vec out_sum_vec;
+  Vec out_kv_vec;
+  Vec out_max_vec;
+  Vec out_sum_vec;
+  if (pos_in_chunk != 0) {
+    // Mid-chunk: combine prior partial state with the new token via online softmax.
 #pragma unroll
     for (uint32_t i = 0; i < 4; ++i) {
       const auto old_max = max_score_vec[i];
@@ -160,27 +168,26 @@ __global__ void flash_c128_online_decode(const __grid_constant__ Compress128Onli
       out_max_vec[i] = new_max;
       out_sum_vec[i] = new_sum;
     }
-    if (offset == 0) {
-      const auto kv_out = static_cast<float*>(params.kv_compressed_output) + batch_id * kHeadDim;
-      gmem.store(kv_out, out_kv_vec);
-    } else {
-      gmem.store(kv_buf, out_kv_vec, 0);
-      gmem.store(kv_buf, out_max_vec, 1);
-      gmem.store(kv_buf, out_sum_vec, 2);
-    }
   } else {
-    Vec out_kv_vec;
-    Vec out_max_vec;
-    Vec out_sum_vec;
+    // First token of a new 128-chunk: initialize state with this token alone.
 #pragma unroll
     for (uint32_t i = 0; i < 4; ++i) {
       out_kv_vec[i] = new_kv_vec[i];
       out_max_vec[i] = new_score_raw_vec[i] + bias_vec[i];
-      out_sum_vec[i] = 1.0f;  // exp(0) = 1
+      out_sum_vec[i] = 1.0f;  // exp(score - max) with max == score
     }
-    gmem.store(kv_buf, out_kv_vec, 0);
-    gmem.store(kv_buf, out_max_vec, 1);
-    gmem.store(kv_buf, out_sum_vec, 2);
+  }
+
+  if (pos_in_chunk == 127) {
+    // Chunk just closed: emit the compressed kv. No need to update the buffer
+    // -- the next chunk's first token will overwrite it.
+    const auto kv_out = static_cast<float*>(params.kv_compressed_output) + batch_id * kHeadDim;
+    gmem.store(kv_out, out_kv_vec);
+  } else {
+    // Otherwise persist the running [max, sum, kv] state for the next step.
+    gmem.store(kv_buf, out_max_vec, 0);
+    gmem.store(kv_buf, out_sum_vec, 1);
+    gmem.store(kv_buf, out_kv_vec, 2);
   }
 }
 
