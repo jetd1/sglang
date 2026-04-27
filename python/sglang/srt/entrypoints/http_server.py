@@ -1231,6 +1231,58 @@ async def openai_v1_chat_completions(
     )
 
 
+# ============================================================
+# Anthropic Messages API (/v1/messages) compatibility layer
+# ============================================================
+# Lazily imported so an import-time failure (e.g. on a build that strips
+# the anthropic submodule) cannot brick the whole HTTP server. When the
+# import works, both /v1/messages and /v1/messages/count_tokens delegate
+# to AnthropicServing, which in turn calls into OpenAIServingChat.
+try:
+    from sglang.srt.entrypoints.anthropic.protocol import (
+        AnthropicCountTokensRequest,
+        AnthropicMessagesRequest,
+    )
+    from sglang.srt.entrypoints.anthropic.serving import AnthropicServing
+except Exception as _anthropic_import_exc:  # pragma: no cover
+    logger.warning(
+        "Anthropic /v1/messages adapter import failed; routes will be unavailable: %s",
+        _anthropic_import_exc,
+    )
+    AnthropicMessagesRequest = None  # type: ignore[assignment]
+    AnthropicCountTokensRequest = None  # type: ignore[assignment]
+    AnthropicServing = None  # type: ignore[assignment]
+
+
+if AnthropicMessagesRequest is not None:
+
+    def _get_or_create_anthropic_serving(raw_request: Request) -> "AnthropicServing":
+        state = raw_request.app.state
+        if not hasattr(state, "anthropic_serving"):
+            state.anthropic_serving = AnthropicServing(state.openai_serving_chat)
+        return state.anthropic_serving
+
+    @app.post(
+        "/v1/messages", dependencies=[Depends(validate_json_request)]
+    )
+    async def anthropic_v1_messages(
+        request: AnthropicMessagesRequest, raw_request: Request
+    ):
+        """Anthropic-compatible messages endpoint."""
+        serving = _get_or_create_anthropic_serving(raw_request)
+        return await serving.handle_messages(request, raw_request)
+
+    @app.post(
+        "/v1/messages/count_tokens",
+        dependencies=[Depends(validate_json_request)],
+    )
+    async def anthropic_v1_count_tokens(
+        request: AnthropicCountTokensRequest, raw_request: Request
+    ):
+        """Anthropic-compatible token counting endpoint."""
+        serving = _get_or_create_anthropic_serving(raw_request)
+        return await serving.handle_count_tokens(request, raw_request)
+
 @app.post(
     "/v1/embeddings",
     response_class=ORJSONResponse,
