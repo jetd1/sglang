@@ -47,14 +47,18 @@ from sglang.srt.entrypoints.harmony_utils import (
 from sglang.srt.entrypoints.openai.protocol import (
     ChatCompletionMessageParam,
     ChatCompletionRequest,
+    Function,
+    MessageProcessingResult,
     PromptTokenUsageInfo,
     RequestResponseMetadata,
     ResponsesRequest,
     ResponsesResponse,
+    Tool,
     UsageInfo,
 )
 from sglang.srt.entrypoints.openai.serving_chat import OpenAIServingChat
 from sglang.srt.entrypoints.openai.tool_server import MCPToolServer, ToolServer
+from sglang.srt.function_call.function_call_parser import FunctionCallParser
 from sglang.srt.managers.io_struct import GenerateReqInput
 from sglang.srt.parser.reasoning_parser import ReasoningParser
 from sglang.srt.utils import random_uuid
@@ -203,15 +207,19 @@ class OpenAIServingResponses(OpenAIServingChat):
         try:
             model_name = request.model
             tokenizer = self.tokenizer_manager.tokenizer
+            processed_messages: Optional[MessageProcessingResult] = None
 
             if self.use_harmony:
                 messages, request_prompts, engine_prompts = (
                     self._make_request_with_harmony(request, prev_response)
                 )
             else:
-                messages, request_prompts, engine_prompts = await self._make_request(
-                    request, prev_response, tokenizer
-                )
+                (
+                    messages,
+                    request_prompts,
+                    engine_prompts,
+                    processed_messages,
+                ) = await self._make_request(request, prev_response, tokenizer)
 
         except (ValueError, TypeError, RuntimeError, jinja2.TemplateError) as e:
             logger.exception("Error in preprocessing prompt inputs")
@@ -261,10 +269,10 @@ class OpenAIServingResponses(OpenAIServingChat):
                     tool_sessions = {}
                 for i, engine_prompt in enumerate(engine_prompts):
                     # Calculate default max tokens from context length minus prompt length
-                    if hasattr(engine_prompt, "__len__"):
+                    if isinstance(engine_prompt, list):
                         prompt_length = len(engine_prompt)
-                    elif isinstance(engine_prompt, list):
-                        prompt_length = len(engine_prompt)
+                    elif isinstance(engine_prompt, str):
+                        prompt_length = len(tokenizer.encode(engine_prompt))
                     else:
                         prompt_length = 0
 
@@ -273,11 +281,23 @@ class OpenAIServingResponses(OpenAIServingChat):
                         if hasattr(self.tokenizer_manager.model_config, "context_len")
                         else 4096
                     )
+                    num_reserved_tokens = self.tokenizer_manager.num_reserved_tokens
                     default_max_tokens = max(
-                        context_len - prompt_length, 512
+                        context_len - prompt_length - num_reserved_tokens, 512
                     )  # Ensure minimum 512 tokens
                     sampling_params = request.to_sampling_params(
-                        default_max_tokens, self.default_sampling_params
+                        default_max_tokens,
+                        self.default_sampling_params,
+                        stop=(
+                            processed_messages.stop
+                            if processed_messages
+                            else request.stop
+                        ),
+                        tool_call_constraint=(
+                            processed_messages.tool_call_constraint
+                            if processed_messages
+                            else None
+                        ),
                     )
 
                     context: ConversationContext
@@ -290,8 +310,33 @@ class OpenAIServingResponses(OpenAIServingChat):
                         context = SimpleContext()
 
                     # Create GenerateReqInput for SGLang
+                    if isinstance(engine_prompt, str):
+                        prompt_kwargs = {"text": engine_prompt}
+                    else:
+                        prompt_kwargs = {"input_ids": engine_prompt}
+
                     adapted_request = GenerateReqInput(
-                        input_ids=engine_prompt,
+                        **prompt_kwargs,
+                        image_data=(
+                            processed_messages.image_data
+                            if processed_messages
+                            else None
+                        ),
+                        video_data=(
+                            processed_messages.video_data
+                            if processed_messages
+                            else None
+                        ),
+                        audio_data=(
+                            processed_messages.audio_data
+                            if processed_messages
+                            else None
+                        ),
+                        modalities=(
+                            processed_messages.modalities
+                            if processed_messages
+                            else None
+                        ),
                         sampling_params=sampling_params,
                         stream=request.stream,
                         rid=request.request_id,
@@ -388,43 +433,40 @@ class OpenAIServingResponses(OpenAIServingChat):
         prev_response: Optional[ResponsesResponse],
         tokenizer: Any,
     ):
-        # Construct the input messages
+        """Build chat input for the Responses API.
+
+        Errors propagate to create_responses and become request errors. The old
+        ad-hoc role/content text fallback silently degraded multimodal content
+        and tool-call prompts, so it is intentionally gone.
+        """
         messages = self._construct_input_messages(request, prev_response)
 
-        # Follow SGLang's pattern: create a ChatCompletionRequest and process messages
-        try:
-            # Convert ResponsesRequest to ChatCompletionRequest for processing
-            chat_request = ChatCompletionRequest(
-                model=request.model,
-                messages=messages,
-                stream=request.stream,
-            )
+        chat_tools = self._response_tools_to_chat_tools(request)
+        chat_request = ChatCompletionRequest(
+            model=request.model,
+            messages=messages,
+            stream=request.stream,
+            tools=chat_tools or None,
+            tool_choice=request.tool_choice if chat_tools else "none",
+            parallel_tool_calls=(
+                request.parallel_tool_calls
+                if request.parallel_tool_calls is not None
+                else True
+            ),
+            stop=request.stop,
+        )
 
-            # Follow SGLang's _process_messages pattern
-            is_multimodal = self.tokenizer_manager.model_config.is_multimodal
-            processed_messages = self._process_messages(chat_request, is_multimodal)
+        is_multimodal = self.tokenizer_manager.model_config.is_multimodal
+        processed_messages = self._process_messages(chat_request, is_multimodal)
 
-            # Extract the results
-            if is_multimodal:
-                request_prompts = [processed_messages.prompt]
-                engine_prompts = [processed_messages.prompt]
-            else:
-                request_prompts = [processed_messages.prompt_ids]
-                engine_prompts = [processed_messages.prompt_ids]
+        if is_multimodal:
+            request_prompts = [processed_messages.prompt]
+            engine_prompts = [processed_messages.prompt]
+        else:
+            request_prompts = [processed_messages.prompt_ids]
+            engine_prompts = [processed_messages.prompt_ids]
 
-        except Exception as e:
-            logger.warning(f"Chat processing failed, using fallback: {e}")
-            # Fallback to simple encoding
-            prompt_text = ""
-            for msg in messages:
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
-                prompt_text += f"{role}: {content}\n"
-            prompt_ids = tokenizer.encode(prompt_text)
-            request_prompts = [prompt_ids]
-            engine_prompts = [prompt_ids]
-
-        return messages, request_prompts, engine_prompts
+        return messages, request_prompts, engine_prompts, processed_messages
 
     def _make_request_with_harmony(
         self,
@@ -575,6 +617,34 @@ class OpenAIServingResponses(OpenAIServingChat):
                 status=None,
             )
             output_items.append(reasoning_item)
+        # Extract function tool calls from the assistant text. Mirrors the
+        # FunctionCallParser path in OpenAIServingChat._process_tool_calls so
+        # /v1/responses returns ResponseFunctionToolCall items instead of
+        # leaking raw tool-call markup as plain text.
+        chat_tools = self._response_tools_to_chat_tools(request)
+        if (
+            content
+            and chat_tools
+            and self.tool_call_parser
+            and request.tool_choice != "none"
+        ):
+            parser = FunctionCallParser(chat_tools, self.tool_call_parser)
+            if parser.has_tool_call(content):
+                try:
+                    content, call_info_list = parser.parse_non_stream(content)
+                    for call_info in call_info_list:
+                        output_items.append(
+                            ResponseFunctionToolCall(
+                                arguments=call_info.parameters or "",
+                                call_id=f"call_{random_uuid()[:24]}",
+                                type="function_call",
+                                name=call_info.name,
+                                id=f"fc_{random_uuid()[:8]}",
+                                status="completed",
+                            )
+                        )
+                except Exception as e:
+                    logger.error("Tool call parsing error: %s", e)
         if content:
             output_text = ResponseOutputText(
                 text=content,
@@ -606,6 +676,143 @@ class OpenAIServingResponses(OpenAIServingChat):
             output_items.extend(last_items)
         return output_items
 
+    @staticmethod
+    def _response_tools_to_chat_tools(request: ResponsesRequest) -> list[Tool]:
+        chat_tools = []
+        for tool in request.tools:
+            if tool.type != "function":
+                continue
+            chat_tools.append(
+                Tool(
+                    type="function",
+                    function=Function(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=tool.parameters,
+                        strict=tool.strict,
+                    ),
+                )
+            )
+        return chat_tools
+
+    @staticmethod
+    def _normalize_response_content_part_for_chat(content_part: Any) -> Any:
+        if hasattr(content_part, "model_dump"):
+            content_part = content_part.model_dump(exclude_none=True)
+        if not isinstance(content_part, dict):
+            return content_part
+
+        part_type = content_part.get("type")
+        if part_type == "input_text":
+            return {"type": "text", "text": content_part.get("text", "")}
+
+        if part_type == "input_image":
+            image_url = content_part.get("image_url")
+            if isinstance(image_url, dict):
+                image_url_obj = image_url.copy()
+            else:
+                image_url_obj = {"url": image_url}
+            if not image_url_obj.get("detail"):
+                image_url_obj["detail"] = content_part.get("detail") or "auto"
+            for key in ("min_dynamic_patch", "max_dynamic_patch"):
+                if key in content_part and key not in image_url_obj:
+                    image_url_obj[key] = content_part[key]
+            return {"type": "image_url", "image_url": image_url_obj}
+
+        if part_type == "text":
+            return content_part
+
+        if part_type == "image_url":
+            image_url = content_part.get("image_url")
+            if isinstance(image_url, str):
+                image_url = {
+                    "url": image_url,
+                    "detail": content_part.get("detail", "auto"),
+                }
+            elif isinstance(image_url, dict):
+                image_url = image_url.copy()
+                if not image_url.get("detail"):
+                    image_url["detail"] = content_part.get("detail") or "auto"
+            return {**content_part, "image_url": image_url}
+
+        return content_part
+
+    @classmethod
+    def _normalize_response_message_for_chat(cls, message: Any) -> Any:
+        if hasattr(message, "model_dump"):
+            message = message.model_dump(exclude_none=True)
+        if not isinstance(message, dict):
+            return message
+
+        msg_type = message.get("type")
+        if msg_type == "function_call":
+            return {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": message.get("call_id") or message.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": message.get("name"),
+                            "arguments": message.get("arguments", ""),
+                        },
+                    }
+                ],
+            }
+        if msg_type == "function_call_output":
+            return {
+                "role": "tool",
+                "tool_call_id": message.get("call_id"),
+                "content": message.get("output", ""),
+            }
+        if msg_type not in (None, "message"):
+            raise ValueError(f"Unsupported Responses API input item type: {msg_type!r}")
+
+        content = message.get("content")
+        if not isinstance(content, list):
+            return {
+                k: v
+                for k, v in message.items()
+                if v is not None and k not in ("id", "status", "type")
+            }
+
+        return {
+            k: v
+            for k, v in {
+                **message,
+                "content": [
+                    cls._normalize_response_content_part_for_chat(part)
+                    for part in content
+                ],
+            }.items()
+            if v is not None and k not in ("id", "status", "type")
+        }
+
+    @staticmethod
+    def _output_message_text(output_item: Any) -> Optional[str]:
+        if isinstance(output_item, ResponseReasoningItem):
+            return None
+        if hasattr(output_item, "model_dump"):
+            output_item = output_item.model_dump(exclude_none=True)
+        if not isinstance(output_item, dict):
+            return None
+        if output_item.get("type") != "message":
+            return None
+
+        text_parts = []
+        for content in output_item.get("content") or []:
+            if isinstance(content, ResponseOutputText):
+                text_parts.append(content.text)
+                continue
+            if hasattr(content, "model_dump"):
+                content = content.model_dump(exclude_none=True)
+            if isinstance(content, dict) and content.get("type") == "output_text":
+                text = content.get("text")
+                if text is not None:
+                    text_parts.append(text)
+
+        return "\n".join(text_parts) if text_parts else None
+
     def _construct_input_messages(
         self,
         request: ResponsesRequest,
@@ -626,25 +833,23 @@ class OpenAIServingResponses(OpenAIServingChat):
             prev_msg = self.msg_store[prev_response.id]
             messages.extend(prev_msg)
 
-            # Add the previous output
+            # Add previous assistant text outputs only. Reasoning, tool calls,
+            # and other non-message output items are intentionally skipped here.
             for output_item in prev_response.output:
-                # NOTE: We skip the reasoning output of the previous response
-                if isinstance(output_item, ResponseReasoningItem):
+                assistant_text = self._output_message_text(output_item)
+                if assistant_text is None:
                     continue
-                for content in output_item.content:
-                    messages.append(
-                        {
-                            "role": "system",
-                            "content": request.instructions,
-                        }
-                    )
+                messages.append({"role": "assistant", "content": assistant_text})
 
         # Append the new input
         # Responses API supports simple text inputs without chat format
         if isinstance(request.input, str):
             messages.append({"role": "user", "content": request.input})
         else:
-            messages.extend(request.input)  # type: ignore
+            messages.extend(
+                self._normalize_response_message_for_chat(input_item)
+                for input_item in request.input
+            )  # type: ignore
         return messages
 
     def _construct_input_messages_with_harmony(
