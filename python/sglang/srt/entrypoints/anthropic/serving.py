@@ -166,6 +166,49 @@ STOP_REASON_MAP = {
 }
 
 
+def _usage_value(usage: Any, key: str, default: Any = 0) -> Any:
+    if usage is None:
+        return default
+    if isinstance(usage, dict):
+        return usage.get(key, default) or default
+    return getattr(usage, key, default) or default
+
+
+def _cached_prompt_tokens(usage: Any) -> int:
+    prompt_tokens_details = _usage_value(usage, "prompt_tokens_details", None)
+    return int(_usage_value(prompt_tokens_details, "cached_tokens", 0) or 0)
+
+
+def _anthropic_usage_from_openai_usage(
+    usage: Any,
+    *,
+    force_zero_output: bool = False,
+) -> AnthropicUsage:
+    if usage is None:
+        return AnthropicUsage(input_tokens=0, output_tokens=0)
+
+    prompt_tokens = int(_usage_value(usage, "prompt_tokens", 0) or 0)
+    cached_tokens = _cached_prompt_tokens(usage)
+    if cached_tokens > prompt_tokens:
+        logger.warning(
+            "Cached tokens (%d) exceed prompt tokens (%d); clamping input_tokens to 0",
+            cached_tokens,
+            prompt_tokens,
+        )
+
+    usage_fields = {
+        "input_tokens": max(prompt_tokens - cached_tokens, 0),
+        "output_tokens": (
+            0
+            if force_zero_output
+            else int(_usage_value(usage, "completion_tokens", 0) or 0)
+        ),
+    }
+    if cached_tokens:
+        usage_fields["cache_read_input_tokens"] = cached_tokens
+    return AnthropicUsage(**usage_fields)
+
+
 def _wrap_sse_event(data: str, event_type: str) -> str:
     """Format an Anthropic SSE event with event type and data lines."""
     return f"event: {event_type}\ndata: {data}\n\n"
@@ -599,7 +642,7 @@ class AnthropicServing:
         content_block_open = False
         thinking_block_open = False
         finish_reason: Optional[str] = None
-        usage_info: Optional[dict] = None
+        usage_info: Optional[Any] = None
         message_id = f"msg_{uuid.uuid4().hex}"
         model = anthropic_request.model
 
@@ -638,14 +681,7 @@ class AnthropicServing:
                 delta_event = AnthropicStreamEvent(
                     type="message_delta",
                     delta=AnthropicDelta(stop_reason=stop_reason),
-                    usage=AnthropicUsage(
-                        input_tokens=(
-                            usage_info.get("input_tokens", 0) if usage_info else 0
-                        ),
-                        output_tokens=(
-                            usage_info.get("output_tokens", 0) if usage_info else 0
-                        ),
-                    ),
+                    usage=_anthropic_usage_from_openai_usage(usage_info),
                 )
                 yield _wrap_sse_event(
                     delta_event.model_dump_json(exclude_none=True),
@@ -686,11 +722,8 @@ class AnthropicServing:
                         id=message_id,
                         content=[],
                         model=model,
-                        usage=AnthropicUsage(
-                            input_tokens=(
-                                chunk.usage.prompt_tokens if chunk.usage else 0
-                            ),
-                            output_tokens=0,
+                        usage=_anthropic_usage_from_openai_usage(
+                            chunk.usage, force_zero_output=True
                         ),
                     ),
                 )
@@ -704,10 +737,7 @@ class AnthropicServing:
 
             # Usage-only chunk (empty choices with usage info)
             if not chunk.choices and chunk.usage:
-                usage_info = {
-                    "input_tokens": chunk.usage.prompt_tokens,
-                    "output_tokens": chunk.usage.completion_tokens or 0,
-                }
+                usage_info = chunk.usage
                 continue
 
             if not chunk.choices:
@@ -923,10 +953,7 @@ class AnthropicServing:
             content=content,
             model=response.model,
             stop_reason=stop_reason,
-            usage=AnthropicUsage(
-                input_tokens=response.usage.prompt_tokens if response.usage else 0,
-                output_tokens=response.usage.completion_tokens if response.usage else 0,
-            ),
+            usage=_anthropic_usage_from_openai_usage(response.usage),
         )
 
     def _error_response(
@@ -1000,4 +1027,3 @@ class AnthropicServing:
                 error_type="internal_error",
                 message="Internal server error",
             )
-

@@ -66,6 +66,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _field_value(source: Any, key: str, default: Any = 0) -> Any:
+    if source is None:
+        return default
+    if isinstance(source, dict):
+        return source.get(key, default) or default
+    return getattr(source, key, default) or default
+
+
+def _cached_tokens_from_usage_payload(usage_info: dict) -> int:
+    prompt_details = usage_info.get("prompt_tokens_details") or {}
+    return int(
+        _field_value(prompt_details, "cached_tokens", usage_info.get("cached_tokens", 0))
+        or 0
+    )
+
+
 class OpenAIServingResponses(OpenAIServingChat):
     """Handler for /v1/responses requests"""
 
@@ -463,11 +479,19 @@ class OpenAIServingResponses(OpenAIServingChat):
                 request, final_res["text"], tokenizer
             )
 
-            # Calculate usage from actual output
-            if hasattr(final_res, "meta_info"):
-                num_prompt_tokens = final_res.meta_info.get("prompt_tokens", 0)
-                num_generated_tokens = final_res.meta_info.get("completion_tokens", 0)
-                num_cached_tokens = final_res.meta_info.get("cached_tokens", 0)
+            # Calculate usage from actual output.
+            if isinstance(final_res, dict):
+                meta_info = final_res.get("meta_info") or {}
+                num_prompt_tokens = meta_info.get("prompt_tokens", 0) or 0
+                num_generated_tokens = meta_info.get("completion_tokens", 0) or 0
+                num_cached_tokens = meta_info.get("cached_tokens", 0) or 0
+                num_reasoning_tokens = meta_info.get("reasoning_tokens", 0) or 0
+            elif hasattr(final_res, "meta_info"):
+                meta_info = final_res.meta_info or {}
+                num_prompt_tokens = meta_info.get("prompt_tokens", 0) or 0
+                num_generated_tokens = meta_info.get("completion_tokens", 0) or 0
+                num_cached_tokens = meta_info.get("cached_tokens", 0) or 0
+                num_reasoning_tokens = meta_info.get("reasoning_tokens", 0) or 0
             elif hasattr(final_res, "prompt_token_ids") and hasattr(
                 final_res, "outputs"
             ):
@@ -1234,7 +1258,7 @@ class OpenAIServingResponses(OpenAIServingChat):
             response_dict["usage"] = {
                 "input_tokens": usage_info.get("prompt_tokens", 0),
                 "input_tokens_details": {
-                    "cached_tokens": usage_info.get("cached_tokens", 0)
+                    "cached_tokens": _cached_tokens_from_usage_payload(usage_info)
                 },
                 "output_tokens": usage_info.get("completion_tokens", 0),
                 "output_tokens_details": {
