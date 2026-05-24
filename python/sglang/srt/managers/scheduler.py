@@ -613,9 +613,16 @@ class Scheduler(
             reasoning_parser = ReasoningParser(
                 model_type=self.server_args.reasoning_parser, stream_reasoning=False
             )
-            self.model_config.think_end_id = self.tokenizer.encode(
-                reasoning_parser.detector.think_end_token, add_special_tokens=False
-            )[0]
+            think_end_token_ids = []
+            for token in reasoning_parser.detector._think_end_tokens():
+                encoded = self.tokenizer.encode(token, add_special_tokens=False)
+                if encoded and encoded not in think_end_token_ids:
+                    think_end_token_ids.append(encoded)
+            primary_ids = think_end_token_ids[0] if think_end_token_ids else []
+            # Keep the first primary token for legacy wrapper gating; the full
+            # sequence list below is used for actual reasoning-end detection.
+            self.model_config.think_end_id = primary_ids[0] if primary_ids else None
+            self.model_config.think_end_token_ids = think_end_token_ids or None
 
     def init_mamba_backend(self) -> None:
         initialize_mamba_selective_state_update_backend(self.server_args)

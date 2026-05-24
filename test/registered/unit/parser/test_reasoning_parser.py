@@ -1499,6 +1499,76 @@ class TestGptOssDetectorToolCall(CustomTestCase):
         self.assertIn("done", all_normal)
 
 
+class TestMimoDetector(CustomTestCase):
+    def test_strips_repeated_start_markers_non_stream(self):
+        cls = ReasoningParser.DetectorMap["mimo"]
+        detector = cls(force_reasoning=True)
+
+        result = detector.detect_and_parse("<think><thinking>hidden</thinking>visible")
+
+        self.assertEqual(result.reasoning_text, "hidden")
+        self.assertEqual(result.normal_text, "visible")
+
+    def test_accepts_anthropic_style_previous_content_for_continuation(self):
+        cls = ReasoningParser.DetectorMap["mimo"]
+        detector = cls(
+            force_reasoning=False,
+            continue_final_message=True,
+            previous_content="<thinking>partial reasoning",
+        )
+
+        self.assertTrue(detector._in_reasoning)
+
+        result = detector.parse_streaming_increment("</thinking>visible answer")
+
+        self.assertEqual(result.reasoning_text, "")
+        self.assertEqual(result.normal_text, "visible answer")
+        self.assertFalse(detector._in_reasoning)
+
+    def test_strips_repeated_start_markers_streaming(self):
+        cls = ReasoningParser.DetectorMap["mimo"]
+        detector = cls(force_reasoning=True)
+
+        result = detector.parse_streaming_increment(
+            "<think><thinking>hidden</thinking>visible"
+        )
+
+        self.assertEqual(result.reasoning_text, "hidden")
+        self.assertEqual(result.normal_text, "visible")
+        self.assertFalse(detector._in_reasoning)
+
+    def test_accepts_anthropic_style_thinking_end_tag_non_stream(self):
+        cls = ReasoningParser.DetectorMap["mimo"]
+        detector = cls(force_reasoning=True)
+
+        result = detector.detect_and_parse("hidden reasoning</thinking>visible answer")
+
+        self.assertEqual(result.reasoning_text, "hidden reasoning")
+        self.assertEqual(result.normal_text, "visible answer")
+
+    def test_accepts_split_anthropic_style_thinking_end_tag_streaming(self):
+        cls = ReasoningParser.DetectorMap["mimo"]
+        detector = cls(force_reasoning=True)
+
+        first = detector.parse_streaming_increment("</think")
+        second = detector.parse_streaming_increment("ing>visible answer")
+
+        self.assertEqual(first.reasoning_text, "")
+        self.assertEqual(first.normal_text, "")
+        self.assertEqual(second.reasoning_text, "")
+        self.assertEqual(second.normal_text, "visible answer")
+        self.assertFalse(detector._in_reasoning)
+
+    def test_accepts_anthropic_style_thinking_start_and_end_tags(self):
+        cls = ReasoningParser.DetectorMap["mimo"]
+        detector = cls()
+
+        result = detector.detect_and_parse("<thinking>hidden reasoning</thinking>visible answer")
+
+        self.assertEqual(result.reasoning_text, "hidden reasoning")
+        self.assertEqual(result.normal_text, "visible answer")
+
+
 class TestPoolsideV1Registered(CustomTestCase):
     """poolside_v1 (Laguna-XS.2) reuses the Qwen3 `<think>...</think>` envelope.
     Request dispatch differs (Mimo-style explicit `enable_thinking=True`,

@@ -127,23 +127,26 @@ class TestReasonerGrammarBackend(unittest.TestCase):
         else:
             os.environ["SGLANG_MAX_THINK_TOKENS"] = self._prev_budget
 
-    def _make_parser(self):
+    def _make_parser(self, end_tokens=None):
+        end_tokens = ["</think>"] if end_tokens is None else end_tokens
         detector = SimpleNamespace(
             think_start_token="<think>",
-            think_end_token="</think>",
+            think_end_token=end_tokens[0],
             think_excluded_tokens=["<tool_call>", "</tool_call>"],
+            _think_end_tokens=lambda: end_tokens,
         )
         return SimpleNamespace(detector=detector)
 
-    def _make_tokenizer(self, start_ids=None, end_ids=None):
-        return _DummyTokenizer(
-            {
-                "<think>": [1] if start_ids is None else start_ids,
-                "</think>": [2] if end_ids is None else end_ids,
-                "<tool_call>": [3],
-                "</tool_call>": [4],
-            }
-        )
+    def _make_tokenizer(self, start_ids=None, end_ids=None, extra_tokens=None):
+        token_map = {
+            "<think>": [1] if start_ids is None else start_ids,
+            "</think>": [2] if end_ids is None else end_ids,
+            "<tool_call>": [3],
+            "</tool_call>": [4],
+        }
+        if extra_tokens:
+            token_map.update(extra_tokens)
+        return _DummyTokenizer(token_map)
 
     def test_init_strict_reasoning_grammar_uses_token_filter_and_budget(self):
         os.environ["SGLANG_MAX_THINK_TOKENS"] = "2"
@@ -214,6 +217,23 @@ class TestReasonerGrammarBackend(unittest.TestCase):
                 self._make_tokenizer(end_ids=[2, 3]),
                 enable_strict_thinking=True,
             )
+
+    def test_accepts_extra_multi_token_think_end_marker(self):
+        backend = _DummyGrammarBackend(support_token_filter=True)
+        reasoner = ReasonerGrammarBackend(
+            backend,
+            self._make_parser(end_tokens=["</think>", "</thinking>"]),
+            self._make_tokenizer(extra_tokens={"</thinking>": [5, 6, 7]}),
+            enable_strict_thinking=True,
+        )
+
+        obj = reasoner.init_strict_reasoning_grammar(reasoning=True)
+        obj.accept_token(10)
+        obj.accept_token(5)
+        obj.accept_token(6)
+        obj.accept_token(7)
+
+        self.assertTrue(obj._is_generation())
 
     def test_rejects_unencodable_excluded_token(self):
         backend = _DummyGrammarBackend(support_token_filter=True)
@@ -308,6 +328,43 @@ class TestReasonerGrammarObjectRollback(unittest.TestCase):
         self.assertEqual(obj.tokens_in_think, 1)
         # Grammar should be rolled back by 3 (only generation tokens)
         inner_grammar.rollback.assert_called_once_with(3)
+
+    def test_rollback_multi_token_end_restores_prefix_tail(self):
+        obj, inner_grammar = self._make_object_with_mock_grammar()
+        obj.think_end_token_ids = [[7], [5, 6, 7]]
+        obj._max_think_end_len = 3
+        obj.maybe_init_reasoning(True)
+
+        obj.accept_token(10)
+        obj.accept_token(5)
+        obj.accept_token(6)
+
+        self.assertTrue(obj._is_thinking())
+        self.assertEqual(obj._reasoning_token_tail, [10, 5, 6])
+        self.assertEqual(obj._allowed_think_end_next_ids(), [7])
+
+        obj.accept_token(7)
+        self.assertTrue(obj._is_generation())
+
+        obj.rollback(1)
+
+        self.assertTrue(obj._is_thinking())
+        self.assertEqual(obj._reasoning_token_tail, [10, 5, 6])
+        self.assertEqual(obj._allowed_think_end_next_ids(), [7])
+
+    def test_strict_budget_allows_multi_token_end_continuation(self):
+        obj, _ = self._make_object_with_mock_grammar()
+        obj.think_end_token_ids = [[7], [5, 6, 7]]
+        obj._max_think_end_len = 3
+        obj.max_think_tokens = 1
+        obj.maybe_init_reasoning(True)
+        obj.accept_token(5)
+        mask = torch.zeros((1, 2), dtype=torch.int32)
+
+        obj.fill_vocab_mask(mask, 0)
+
+        allowed = _allowed_token_ids(mask, [5, 6, 7])
+        self.assertEqual(allowed, [6])
 
     def test_rollback_generation_tokens_only(self):
         obj, inner_grammar = self._make_object_with_mock_grammar()

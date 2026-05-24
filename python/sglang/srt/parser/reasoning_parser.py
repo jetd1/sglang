@@ -34,6 +34,8 @@ class BaseReasoningFormatDetector:
     ):
         self.think_start_token = think_start_token
         self.think_end_token = think_end_token
+        self.extra_think_start_tokens: List[str] = []
+        self.extra_think_end_tokens: List[str] = []
         self.think_excluded_tokens = think_excluded_tokens
         self.tool_start_token = tool_start_token
         self.force_reasoning = force_reasoning
@@ -54,30 +56,51 @@ class BaseReasoningFormatDetector:
             self.previous_content = ""
             self.previous_count = 0
 
-        if self.think_start_token in self.previous_content:
+        self._sync_reasoning_state_from_previous_content()
+
+    def _sync_reasoning_state_from_previous_content(self) -> None:
+        if self._find_first_token(self.previous_content, self._think_start_texts()):
             self._in_reasoning = True
-        if self.think_end_token in self.previous_content:
+        if self._find_first_token(self.previous_content, self._think_end_tokens()):
             self._in_reasoning = False
+
+    def _think_start_texts(self) -> List[str]:
+        return [
+            self.think_start_token + self.think_start_self_label,
+            *self.extra_think_start_tokens,
+        ]
+
+    def _think_end_tokens(self) -> List[str]:
+        return [self.think_end_token, *self.extra_think_end_tokens]
+
+    @staticmethod
+    def _find_first_token(text: str, tokens: List[str]) -> Optional[Tuple[int, str]]:
+        matches = [(text.find(token), token) for token in tokens if token and token in text]
+        matches = [(idx, token) for idx, token in matches if idx >= 0]
+        if not matches:
+            return None
+        return min(matches, key=lambda item: item[0])
 
     def detect_and_parse(self, text: str) -> StreamingParseResult:
         """
         One-time parsing: Detects and parses reasoning sections in the provided text.
         Returns both reasoning content and normal text separately.
         """
-        in_reasoning = self._in_reasoning or self.think_start_token in text
+        start_texts = self._think_start_texts()
+        end_tokens = self._think_end_tokens()
+        in_reasoning = self._in_reasoning or self._find_first_token(text, start_texts)
 
         if not in_reasoning:
             return StreamingParseResult(normal_text=text)
 
         # The text is considered to be in a reasoning block.
-        processed_text = text.replace(
-            self.think_start_token + self.think_start_self_label, ""
-        ).strip()
+        processed_text = text
+        for start_token in start_texts:
+            processed_text = processed_text.replace(start_token, "")
+        processed_text = processed_text.strip()
 
-        if (
-            self.think_end_token not in processed_text
-            and self.think_end_token not in self.previous_content
-        ):
+        end_match = self._find_first_token(processed_text, end_tokens)
+        if end_match is None and self._find_first_token(self.previous_content, end_tokens) is None:
             # Check for tool_start_token interruption
             if (
                 in_reasoning
@@ -96,16 +119,16 @@ class BaseReasoningFormatDetector:
             return StreamingParseResult(reasoning_text=processed_text)
 
         # Extract reasoning content
-        if self.think_end_token in processed_text:
-            splits = processed_text.split(self.think_end_token, maxsplit=1)
-            reasoning_text = splits[0]
-            normal_text = splits[1].strip()
+        if end_match is not None:
+            end_idx, end_token = end_match
+            reasoning_text = processed_text[:end_idx]
+            normal_text = processed_text[end_idx + len(end_token) :].strip()
 
             return StreamingParseResult(
                 normal_text=normal_text, reasoning_text=reasoning_text
             )
         else:
-            # think_end_token is in self.previous_content for continue_final_message=True case
+            # a think end token is in self.previous_content for continue_final_message=True case
             return StreamingParseResult(normal_text=processed_text)
 
     def parse_streaming_increment(self, new_text: str) -> StreamingParseResult:
@@ -121,10 +144,11 @@ class BaseReasoningFormatDetector:
         self._buffer += new_text
         current_text = self._buffer
 
-        think_start_text = self.think_start_token + self.think_start_self_label
+        start_texts = self._think_start_texts()
+        end_tokens = self._think_end_tokens()
 
-        # If the current text is a prefix of the think token, keep buffering
-        tokens_to_check = [think_start_text, self.think_end_token]
+        # If the current text is a prefix of a think token, keep buffering
+        tokens_to_check = [*start_texts, *end_tokens]
         if self.tool_start_token:
             tokens_to_check.append(self.tool_start_token)
         if any(
@@ -133,21 +157,35 @@ class BaseReasoningFormatDetector:
         ):
             return StreamingParseResult()
 
-        # Strip `<think>` token if present
-        if not self.stripped_think_start and think_start_text in current_text:
-            current_text = current_text.replace(think_start_text, "", 1)
-            self.stripped_think_start = True
-            self._in_reasoning = True
+        # Strip `<think>` token if present. Some reasoning formats allow repeated
+        # opening markers, e.g. `(<think>)*(.*)</think>`; remove every configured
+        # opener before emitting reasoning text.
+        if not self.stripped_think_start:
+            saw_start = False
+            while True:
+                start_match = self._find_first_token(current_text, start_texts)
+                if start_match is None:
+                    break
+                start_idx, start_token = start_match
+                current_text = (
+                    current_text[:start_idx]
+                    + current_text[start_idx + len(start_token) :]
+                )
+                saw_start = True
+            if saw_start:
+                self.stripped_think_start = True
+                self._in_reasoning = True
 
         # Handle end of reasoning block
-        if self._in_reasoning and self.think_end_token in current_text:
-            end_idx = current_text.find(self.think_end_token)
+        end_match = self._find_first_token(current_text, end_tokens)
+        if self._in_reasoning and end_match is not None:
+            end_idx, end_token = end_match
 
             reasoning_text = current_text[:end_idx]
 
             self._buffer = ""
             self._in_reasoning = False
-            normal_text = current_text[end_idx + len(self.think_end_token) :]
+            normal_text = current_text[end_idx + len(end_token) :]
 
             return StreamingParseResult(
                 normal_text=normal_text, reasoning_text=reasoning_text.rstrip()
@@ -585,6 +623,13 @@ class _MimoDetector(Qwen3Detector):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.reasoning_default = "explicit_enable_thinking"
+        # Some MiMo generations close the hidden reasoning section with the
+        # longer XML tag used by Anthropic-style prompts. Treat it as an alias
+        # for Qwen3's </think> marker so final answers do not get swallowed into
+        # reasoning_content.
+        self.extra_think_start_tokens.append("<thinking>")
+        self.extra_think_end_tokens.append("</thinking>")
+        self._sync_reasoning_state_from_previous_content()
 
 
 class _PoolsideV1Detector(Qwen3Detector):

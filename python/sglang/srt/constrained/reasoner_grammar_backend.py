@@ -52,6 +52,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
         self,
         grammar: Optional[BaseGrammarObject],
         think_end_id: int,
+        think_end_token_ids: Optional[List[List[int]]] = None,
         think_excluded_token_ids: Optional[List[int]] = None,
         max_think_tokens: int = -1,
         enable_token_filter: bool = False,
@@ -63,6 +64,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
         super().__init__()
         self.grammar = grammar
         self.think_end_id = think_end_id
+        self.think_end_token_ids = think_end_token_ids or [[think_end_id]]
         self.think_excluded_token_ids = think_excluded_token_ids
         self.max_think_tokens = max_think_tokens
         self.enable_token_filter = enable_token_filter
@@ -70,7 +72,14 @@ class ReasonerGrammarObject(BaseGrammarObject):
         self.allocate_vocab_mask_fn = allocate_vocab_mask_fn
         self.move_vocab_mask_fn = move_vocab_mask_fn
         self.apply_vocab_mask_fn = apply_vocab_mask_fn
-        self._think_end_id_list = [think_end_id]
+        self._think_end_id_list = sorted(
+            {seq[0] for seq in self.think_end_token_ids if seq}
+        )
+        self._thinking_token_history: List[int] = []
+        self._reasoning_token_tail: List[int] = []
+        self._max_think_end_len = max(
+            (len(seq) for seq in self.think_end_token_ids), default=0
+        )
 
         self.tokens_in_think = -1
         self.tokens_after_end = -1
@@ -90,20 +99,54 @@ class ReasonerGrammarObject(BaseGrammarObject):
 
     def transfer_state(self, token: int) -> None:
         if self._is_thinking():
-            if token == self.think_end_id:
+            self._thinking_token_history.append(token)
+            self._refresh_reasoning_token_tail()
+            if any(
+                len(self._reasoning_token_tail) >= len(seq)
+                and self._reasoning_token_tail[-len(seq) :] == seq
+                for seq in self.think_end_token_ids
+            ):
                 self.tokens_after_end = 0
             else:
                 self.tokens_in_think += 1
         elif self._is_generation():
             self.tokens_after_end += 1
 
+    def _refresh_reasoning_token_tail(self) -> None:
+        if self._max_think_end_len <= 0:
+            self._reasoning_token_tail = []
+            return
+        self._reasoning_token_tail = self._thinking_token_history[
+            -self._max_think_end_len :
+        ]
+
+    def _allowed_think_end_next_ids(self) -> List[int]:
+        continuations = []
+        starts = []
+        for seq in self.think_end_token_ids:
+            if not seq:
+                continue
+            starts.append(seq[0])
+            max_prefix_len = min(len(seq) - 1, len(self._reasoning_token_tail))
+            for prefix_len in range(max_prefix_len, 0, -1):
+                if self._reasoning_token_tail[-prefix_len:] == seq[:prefix_len]:
+                    continuations.append(seq[prefix_len])
+                    break
+        return sorted(set(continuations or starts))
+
     def rollback_state(self):
         if self._is_thinking():
             if self.tokens_in_think > 0:
                 self.tokens_in_think -= 1
+                if self._thinking_token_history:
+                    self._thinking_token_history.pop()
+                self._refresh_reasoning_token_tail()
         elif self._is_generation():
             if self.tokens_after_end == 0:
                 self.tokens_after_end = -1
+                if self._thinking_token_history:
+                    self._thinking_token_history.pop()
+                self._refresh_reasoning_token_tail()
             elif self.tokens_after_end > 0:
                 self.tokens_after_end -= 1
 
@@ -142,7 +185,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
                 )
             else:
                 self._do_token_filter(
-                    vocab_mask, self._think_end_id_list, idx, is_allowed=True
+                    vocab_mask, self._allowed_think_end_next_ids(), idx, is_allowed=True
                 )
             return
         if self._is_generation() and self.grammar is not None:
@@ -172,6 +215,7 @@ class ReasonerGrammarObject(BaseGrammarObject):
         new_obj = ReasonerGrammarObject(
             self.grammar.copy() if self.grammar is not None else None,
             self.think_end_id,
+            self.think_end_token_ids,
             self.think_excluded_token_ids,
             self.max_think_tokens,
             self.enable_token_filter,
@@ -182,6 +226,8 @@ class ReasonerGrammarObject(BaseGrammarObject):
         )
         new_obj.tokens_in_think = self.tokens_in_think
         new_obj.tokens_after_end = self.tokens_after_end
+        new_obj._thinking_token_history = list(self._thinking_token_history)
+        new_obj._reasoning_token_tail = list(self._reasoning_token_tail)
         new_obj._finished = self._finished
         return new_obj
 
@@ -225,20 +271,27 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
     ):
         super().__init__()
         self.grammar_backend = grammar_backend
-        think_end_ids = tokenizer.encode(
-            reasoning_parser.detector.think_end_token, add_special_tokens=False
+        think_end_tokens = (
+            reasoning_parser.detector._think_end_tokens()
+            if hasattr(reasoning_parser.detector, "_think_end_tokens")
+            else [reasoning_parser.detector.think_end_token]
         )
-        if not think_end_ids:
+        self.think_end_token_ids = []
+        for token in think_end_tokens:
+            encoded = tokenizer.encode(token, add_special_tokens=False)
+            if not encoded:
+                raise ValueError(
+                    f"think_end_token '{token}' could not be encoded by the tokenizer."
+                )
+            if encoded not in self.think_end_token_ids:
+                self.think_end_token_ids.append(encoded)
+        primary_think_end_ids = self.think_end_token_ids[0]
+        if len(primary_think_end_ids) != 1:
             raise ValueError(
-                f"think_end_token '{reasoning_parser.detector.think_end_token}' "
-                f"could not be encoded by the tokenizer."
-            )
-        if len(think_end_ids) != 1:
-            raise ValueError(
-                f"think_end_token '{reasoning_parser.detector.think_end_token}' "
+                f"think_end_token '{think_end_tokens[0]}' "
                 "must encode to exactly one token for constrained reasoning."
             )
-        self.think_end_id = think_end_ids[0]
+        self.think_end_id = primary_think_end_ids[0]
         self._enable_strict_thinking = enable_strict_thinking
         self.think_excluded_token_ids = self._get_think_excluded_token_ids(
             reasoning_parser, tokenizer
@@ -290,6 +343,7 @@ class ReasonerGrammarBackend(BaseGrammarBackend):
         obj = ReasonerGrammarObject(
             grammar=grammar,
             think_end_id=self.think_end_id,
+            think_end_token_ids=self.think_end_token_ids,
             think_excluded_token_ids=self.think_excluded_token_ids,
             max_think_tokens=self.max_think_tokens,
             enable_token_filter=self.enable_token_filter,

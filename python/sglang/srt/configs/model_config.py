@@ -347,8 +347,11 @@ class ModelConfig:
 
         # Cache attributes
         self.hf_eos_token_id = self._get_hf_eos_token_id()
-        # Set by scheduler when reasoning_parser is enabled
+        # Set by scheduler when reasoning_parser is enabled.
+        # think_end_id keeps the primary marker's first token for backwards compatibility;
+        # think_end_token_ids includes every encoded marker accepted by the text parser.
         self.think_end_id: Optional[int] = None
+        self.think_end_token_ids: Optional[List[List[int]]] = None
 
         # multimodal
         self.image_token_id = getattr(

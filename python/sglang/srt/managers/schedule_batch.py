@@ -668,6 +668,7 @@ class Req(ReqDllmMixin):
         # State indicating whether the reasoning phase has finished (only meaningful when require_reasoning is True)
         self._is_reasoning_over = False
         self.reasoning_tokens = 0
+        self._reasoning_token_tail: List[int] = []
 
         # Sampling info
         if isinstance(sampling_params.custom_params, dict):
@@ -1350,19 +1351,32 @@ class Req(ReqDllmMixin):
             error_msg, HTTPStatus.BAD_REQUEST, "BadRequestError"
         )
 
-    def update_reasoning_tokens(self, token_id, think_end_id):
+    def update_reasoning_tokens(self, token_id, think_end_token_ids):
         if self._is_reasoning_over:
             return
 
         if not isinstance(token_id, list):
             token_id = [token_id]
+        if not isinstance(think_end_token_ids, list):
+            think_end_token_ids = [think_end_token_ids]
+        if think_end_token_ids and isinstance(think_end_token_ids[0], int):
+            think_end_token_ids = [[tid] for tid in think_end_token_ids]
+        think_end_token_ids = [seq for seq in think_end_token_ids if seq]
+        max_end_len = max((len(seq) for seq in think_end_token_ids), default=0)
 
-        try:
-            end_pos = token_id.index(think_end_id)
-            self.reasoning_tokens += end_pos + 1
-            self._is_reasoning_over = True
-        except ValueError:
-            self.reasoning_tokens += len(token_id)
+        for cur_token_id in token_id:
+            self.reasoning_tokens += 1
+            if max_end_len == 0:
+                continue
+            self._reasoning_token_tail.append(cur_token_id)
+            self._reasoning_token_tail = self._reasoning_token_tail[-max_end_len:]
+            if any(
+                len(self._reasoning_token_tail) >= len(seq)
+                and self._reasoning_token_tail[-len(seq) :] == seq
+                for seq in think_end_token_ids
+            ):
+                self._is_reasoning_over = True
+                return
 
     def __repr__(self):
         return (

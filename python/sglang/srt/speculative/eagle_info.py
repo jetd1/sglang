@@ -421,7 +421,11 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
         accept_index_cpu = accept_index.tolist()
         predict_cpu = predict.tolist()
         has_finished = False
-        think_end_id = batch.model_config.think_end_id
+        think_end_token_ids = batch.model_config.think_end_token_ids or (
+            [[batch.model_config.think_end_id]]
+            if batch.model_config.think_end_id is not None
+            else None
+        )
 
         # Iterate every accepted token and check if req has finished after append the token
         # should be checked BEFORE free kv cache slots
@@ -433,8 +437,8 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
                 num_accepted += 1
                 id = predict_cpu[idx]
                 req.output_ids.append(id)
-                if req.require_reasoning and think_end_id is not None:
-                    req.update_reasoning_tokens(id, think_end_id)
+                if req.require_reasoning and think_end_token_ids is not None:
+                    req.update_reasoning_tokens(id, think_end_token_ids)
                 req.check_finished()
                 if not req.finished() and req.grammar is not None:
                     try:
