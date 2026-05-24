@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from typing import TYPE_CHECKING, AsyncGenerator, Optional, Union
@@ -43,12 +44,105 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Cap decoded document size to bound PDF parsing work on the async event loop.
+_MAX_DOC_BYTES = int(
+    os.environ.get("SGLANG_ANTHROPIC_MAX_DOC_BYTES", 10 * 1024 * 1024)
+)
+
+
+def _extract_document_text(item: dict) -> str:
+    """Extract text from a document content block (e.g. PDF).
+
+    Claude Code sends PDF files as base64-encoded document blocks.
+    We decode and extract text so self-hosted models can understand them.
+    """
+    source = item.get("source") or {}
+    if not isinstance(source, dict):
+        return ""
+
+    media_type = source.get("media_type", "")
+    data_b64 = source.get("data", "")
+
+    if not data_b64:
+        return ""
+
+    # base64 encodes 3 bytes as 4 chars; reject oversize payloads before decoding.
+    if len(data_b64) > (_MAX_DOC_BYTES * 4 // 3) + 4:
+        logger.warning(
+            "Document payload exceeds %d bytes (SGLANG_ANTHROPIC_MAX_DOC_BYTES); skipping extraction",
+            _MAX_DOC_BYTES,
+        )
+        return ""
+
+    try:
+        import base64
+
+        raw = base64.b64decode(data_b64)
+    except Exception:
+        return ""
+
+    if media_type == "application/pdf":
+        try:
+            from io import BytesIO
+            from pypdf import PdfReader
+
+            reader = PdfReader(BytesIO(raw))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    pages.append(text)
+            return "\n\n".join(pages) if pages else ""
+        except Exception as e:
+            logger.warning("Failed to extract PDF text: %s", e)
+            return ""
+
+    # For other document types, try UTF-8 decode as fallback
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
+
+
 # Map OpenAI finish reasons to Anthropic stop reasons
 STOP_REASON_MAP = {
     "stop": "end_turn",
     "length": "max_tokens",
     "tool_calls": "tool_use",
 }
+
+
+def _cached_prompt_tokens(usage) -> int:
+    prompt_tokens_details = getattr(usage, "prompt_tokens_details", None)
+    return getattr(prompt_tokens_details, "cached_tokens", 0) or 0
+
+
+def _anthropic_usage_from_openai_usage(
+    usage,
+    *,
+    force_zero_output: bool = False,
+) -> AnthropicUsage:
+    if usage is None:
+        return AnthropicUsage(input_tokens=0, output_tokens=0)
+
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+    cached_tokens = _cached_prompt_tokens(usage)
+    if cached_tokens > prompt_tokens:
+        logger.warning(
+            "Cached tokens (%d) exceed prompt tokens (%d); clamping input_tokens to 0",
+            cached_tokens,
+            prompt_tokens,
+        )
+
+    usage_fields = {
+        "input_tokens": max(prompt_tokens - cached_tokens, 0),
+        "output_tokens": (
+            0 if force_zero_output else (getattr(usage, "completion_tokens", 0) or 0)
+        ),
+    }
+    if cached_tokens:
+        usage_fields["cache_read_input_tokens"] = cached_tokens
+    return AnthropicUsage(**usage_fields)
 
 
 def _wrap_sse_event(data: str, event_type: str) -> str:
@@ -154,6 +248,11 @@ class AnthropicServing:
                             tool_content_parts.append(
                                 {"type": "tool_reference", "name": ref_name}
                             )
+                    elif item_type == "document":
+                        doc_text = _extract_document_text(item)
+                        if doc_text:
+                            tool_text_parts.append(doc_text)
+                            tool_content_parts.append({"type": "text", "text": doc_text})
 
                 tool_text = "\n".join(tool_text_parts)
                 if (
@@ -204,6 +303,11 @@ class AnthropicServing:
                     if image_part is not None:
                         content_parts.append(image_part)
 
+                elif block.type == "document":
+                    doc_text = _extract_document_text({"source": block.source} if block.source else {})
+                    if doc_text:
+                        content_parts.append({"type": "text", "text": doc_text})
+
                 elif block.type == "tool_use":
                     tool_call = {
                         "id": block.id or f"call_{uuid.uuid4().hex}",
@@ -214,6 +318,16 @@ class AnthropicServing:
                         },
                     }
                     tool_calls.append(tool_call)
+
+                elif block.type == "thinking":
+                    thinking_text = block.thinking or ""
+                    if thinking_text:
+                        if "reasoning_content" not in openai_msg:
+                            openai_msg["reasoning_content"] = ""
+                        openai_msg["reasoning_content"] += thinking_text
+
+                elif block.type == "redacted_thinking":
+                    pass
 
                 elif block.type == "tool_result":
                     tool_content, tool_text = _convert_tool_result_content(
@@ -277,6 +391,43 @@ class AnthropicServing:
             request_data["stream_options"] = StreamOptions(include_usage=True)
 
         chat_request = ChatCompletionRequest(**request_data)
+
+        # Wire thinking parameter — ALWAYS set explicitly
+        # Default: thinking=true when client doesn't specify (matches K2.6 / GLM-5 defaults)
+        # Client can disable by sending thinking.type = "disabled"
+        reasoning_parser = self.openai_serving_chat.reasoning_parser
+        if reasoning_parser in ("deepseek-v3", "kimi_k2"):
+            thinking_key = "thinking"
+        else:
+            thinking_key = "enable_thinking"
+
+        if anthropic_request.thinking is not None:
+            thinking_type = anthropic_request.thinking.type
+            # "adaptive" = model decides whether to think (treat as enabled
+            # since the model's reasoning parser handles depth internally)
+            enabled = thinking_type in ("enabled", "adaptive")
+        else:
+            # No thinking field → default to enabled
+            enabled = True
+
+        chat_request.separate_reasoning = enabled
+        if enabled:
+            chat_request.stream_reasoning = True
+        if chat_request.chat_template_kwargs is None:
+            chat_request.chat_template_kwargs = {}
+        chat_request.chat_template_kwargs[thinking_key] = enabled
+        # When thinking is enabled, default preserve_thinking=true (keeps
+        # reasoning_content in chat history for multi-turn continuity)
+        # Client can override by setting it in chat_template_kwargs
+        if enabled and "preserve_thinking" not in chat_request.chat_template_kwargs:
+            chat_request.chat_template_kwargs["preserve_thinking"] = True
+
+        # Wire output_config effort (Claude 4.6+ adaptive thinking)
+        # Note: effort is accepted but has no direct mapping to SGLang.
+        # The model will use its default reasoning depth. This ensures Claude
+        # Code requests with output_config don't error out.
+        if anthropic_request.output_config is not None:
+            pass  # Accepted but no-op for now; model controls reasoning depth
 
         # Convert tools. Deferred tools stay in the list with defer_loading=True;
         # the chat template hides them from the initial <tools> block and renders
@@ -439,6 +590,7 @@ class AnthropicServing:
         first_chunk = True
         content_block_index = 0
         content_block_open = False
+        thinking_block_open = False
         finish_reason: Optional[str] = None
         usage_info: Optional[dict] = None
         message_id = f"msg_{uuid.uuid4().hex}"
@@ -451,8 +603,20 @@ class AnthropicServing:
             data_str = sse_line[6:].strip()
 
             if data_str == "[DONE]":
+                # Close any open thinking block
+                if thinking_block_open:
+                    stop_event = AnthropicStreamEvent(
+                        type="content_block_stop",
+                        index=content_block_index,
+                    )
+                    yield _wrap_sse_event(
+                        stop_event.model_dump_json(exclude_none=True),
+                        "content_block_stop",
+                    )
+                    thinking_block_open = False
+
                 # Close any open content block
-                if content_block_open:
+                elif content_block_open:
                     stop_event = AnthropicStreamEvent(
                         type="content_block_stop",
                         index=content_block_index,
@@ -467,14 +631,7 @@ class AnthropicServing:
                 delta_event = AnthropicStreamEvent(
                     type="message_delta",
                     delta=AnthropicDelta(stop_reason=stop_reason),
-                    usage=AnthropicUsage(
-                        input_tokens=(
-                            usage_info.get("input_tokens", 0) if usage_info else 0
-                        ),
-                        output_tokens=(
-                            usage_info.get("output_tokens", 0) if usage_info else 0
-                        ),
-                    ),
+                    usage=_anthropic_usage_from_openai_usage(usage_info),
                 )
                 yield _wrap_sse_event(
                     delta_event.model_dump_json(exclude_none=True),
@@ -515,11 +672,8 @@ class AnthropicServing:
                         id=message_id,
                         content=[],
                         model=model,
-                        usage=AnthropicUsage(
-                            input_tokens=(
-                                chunk.usage.prompt_tokens if chunk.usage else 0
-                            ),
-                            output_tokens=0,
+                        usage=_anthropic_usage_from_openai_usage(
+                            chunk.usage, force_zero_output=True
                         ),
                     ),
                 )
@@ -533,10 +687,7 @@ class AnthropicServing:
 
             # Usage-only chunk (empty choices with usage info)
             if not chunk.choices and chunk.usage:
-                usage_info = {
-                    "input_tokens": chunk.usage.prompt_tokens,
-                    "output_tokens": chunk.usage.completion_tokens or 0,
-                }
+                usage_info = chunk.usage
                 continue
 
             if not chunk.choices:
@@ -550,6 +701,54 @@ class AnthropicServing:
                 continue
 
             delta = choice.delta
+
+            # Handle reasoning/thinking content deltas
+            if delta.reasoning_content is not None and delta.reasoning_content != "":
+                # Start a thinking content block if needed
+                if not thinking_block_open:
+                    start_event = AnthropicStreamEvent(
+                        type="content_block_start",
+                        index=content_block_index,
+                        content_block=AnthropicContentBlock(
+                            type="thinking", thinking=""
+                        ),
+                    )
+                    yield _wrap_sse_event(
+                        start_event.model_dump_json(exclude_none=True),
+                        "content_block_start",
+                    )
+                    thinking_block_open = True
+
+                # Emit thinking delta
+                delta_event = AnthropicStreamEvent(
+                    type="content_block_delta",
+                    index=content_block_index,
+                    delta=AnthropicDelta(
+                        type="thinking_delta",
+                        thinking=delta.reasoning_content,
+                    ),
+                )
+                yield _wrap_sse_event(
+                    delta_event.model_dump_json(exclude_none=True),
+                    "content_block_delta",
+                )
+                # Do NOT continue here - allow transition logic to run
+                # in case the same chunk has both reasoning_content and content/tool_calls
+
+            # Close thinking block when transitioning to non-thinking content
+            if thinking_block_open and (
+                delta.tool_calls or (delta.content is not None and delta.content != "")
+            ):
+                stop_event = AnthropicStreamEvent(
+                    type="content_block_stop",
+                    index=content_block_index,
+                )
+                yield _wrap_sse_event(
+                    stop_event.model_dump_json(exclude_none=True),
+                    "content_block_stop",
+                )
+                content_block_index += 1
+                thinking_block_open = False
 
             # Handle tool call deltas
             if delta.tool_calls:
@@ -663,6 +862,14 @@ class AnthropicServing:
         choice = response.choices[0]
         content: list[AnthropicContentBlock] = []
 
+        # Add thinking content if present
+        if choice.message.reasoning_content:
+            content.append(
+                AnthropicContentBlock(
+                    type="thinking", thinking=choice.message.reasoning_content
+                )
+            )
+
         # Add text content
         if choice.message.content:
             content.append(
@@ -694,10 +901,7 @@ class AnthropicServing:
             content=content,
             model=response.model,
             stop_reason=stop_reason,
-            usage=AnthropicUsage(
-                input_tokens=response.usage.prompt_tokens if response.usage else 0,
-                output_tokens=response.usage.completion_tokens if response.usage else 0,
-            ),
+            usage=_anthropic_usage_from_openai_usage(response.usage),
         )
 
     def _error_response(
