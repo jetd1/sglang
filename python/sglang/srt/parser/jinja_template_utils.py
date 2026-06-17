@@ -157,14 +157,20 @@ def process_content_for_template_format(
             if isinstance(chunk, dict):
                 chunk_type = chunk.get("type")
 
-                if chunk_type == "image_url":
+                if chunk_type in ("image_url", "input_image"):
                     image_obj = chunk.get("image_url") or {}
+                    if not image_obj and chunk_type == "input_image":
+                        image_obj = chunk.get("input_image") or {}
+                    if not image_obj and chunk.get("image_url"):
+                        image_obj = chunk.get("image_url")
+                    if isinstance(image_obj, str):
+                        image_obj = {"url": image_obj}
                     mdp = image_obj.get("max_dynamic_patch", None)
                     # Also allow flat style: chunk["max_dynamic_patch"]
                     image_data.append(
                         ImageData(
                             url=image_obj["url"],
-                            detail=image_obj.get("detail", "auto"),
+                            detail=image_obj.get("detail", chunk.get("detail", "auto")),
                             max_dynamic_patch=mdp,
                         )
                     )
@@ -194,13 +200,14 @@ def process_content_for_template_format(
                     audio_data.append(chunk["audio_url"]["url"])
                     # Normalize to simple 'audio' type
                     processed_content_parts.append({"type": "audio"})
-                elif chunk_type == "text":
+                elif chunk_type in ("text", "input_text"):
+                    text = chunk.get("text", "")
                     # For v32 encoding, collect text parts separately
                     if use_dpsk_v32_encoding:
-                        text_parts.append(chunk["text"])
+                        text_parts.append(text)
                     else:
-                        # Keep text content as-is for openai format
-                        processed_content_parts.append(chunk)
+                        # Keep text content as OpenAI-style text for template compatibility
+                        processed_content_parts.append({"type": "text", "text": text})
                 elif chunk_type == "tool_reference":
                     # GLM-specific extension: pass through so the chat template
                     # can match tool_reference.name against tools[*].function.name
@@ -220,7 +227,7 @@ def process_content_for_template_format(
         # String format: flatten to text only (for templates like DeepSeek)
         text_parts = []
         for chunk in msg_dict["content"]:
-            if isinstance(chunk, dict) and chunk.get("type") == "text":
+            if isinstance(chunk, dict) and chunk.get("type") in ("text", "input_text"):
                 text_parts.append(chunk["text"])
             # Note: For string format, we ignore images/audio since the template
             # doesn't expect structured content - multimodal placeholders would

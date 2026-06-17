@@ -40,6 +40,7 @@ class AnthropicContentBlock(BaseModel):
         "tool_reference",
         "thinking",
         "redacted_thinking",
+        "document",
     ]
     text: Optional[str] = None
     # For image content
@@ -104,6 +105,24 @@ class AnthropicCountTokensResponse(BaseModel):
     input_tokens: int
 
 
+class AnthropicThinkingParam(BaseModel):
+    """Thinking control parameter for Anthropic Messages API.
+
+    Supports both legacy format and Claude 4.6+ adaptive format:
+    - Legacy: {"type": "enabled"/"disabled", "budget_tokens": N}
+    - Adaptive: {"type": "adaptive"}
+    """
+
+    type: Literal["enabled", "disabled", "adaptive"]
+    budget_tokens: Optional[int] = None
+
+
+class AnthropicOutputConfig(BaseModel):
+    """Output configuration for Anthropic Messages API (Claude 4.6+)."""
+
+    effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
+
+
 class AnthropicMessagesRequest(BaseModel):
     """Anthropic Messages API request"""
 
@@ -115,6 +134,8 @@ class AnthropicMessagesRequest(BaseModel):
     stream: Optional[bool] = False
     system: Optional[str | list[AnthropicContentBlock]] = None
     temperature: Optional[float] = None
+    thinking: Optional[AnthropicThinkingParam] = None
+    output_config: Optional[AnthropicOutputConfig] = None
     tool_choice: Optional[AnthropicToolChoice] = None
     tools: Optional[list[AnthropicTool]] = None
     top_k: Optional[int] = None
@@ -138,9 +159,10 @@ class AnthropicMessagesRequest(BaseModel):
 class AnthropicDelta(BaseModel):
     """Delta for streaming responses"""
 
-    type: Optional[Literal["text_delta", "input_json_delta"]] = None
+    type: Optional[Literal["text_delta", "input_json_delta", "thinking_delta"]] = None
     text: Optional[str] = None
     partial_json: Optional[str] = None
+    thinking: Optional[str] = None
 
     # Message delta fields
     stop_reason: Optional[
