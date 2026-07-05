@@ -1965,6 +1965,12 @@ class OpenAIServingChat(OpenAIServingBase):
 
         chat_template_kwargs = dict(request.chat_template_kwargs or {})
         chat_template_kwargs[toggle_param] = enabled
+        # Also set "thinking" key to align with encoding_dsv4's thinking_mode
+        # which reads ctk["thinking"] (hardcoded at L648), while toggle_param
+        # for DSV4 is "enable_thinking". Without this, /v1/messages produces
+        # reasoning-only responses with no content block.
+        if toggle_param != "thinking":
+            chat_template_kwargs["thinking"] = enabled
         request.chat_template_kwargs = chat_template_kwargs
 
     def _get_reasoning_from_request(self, request: ChatCompletionRequest) -> bool:
