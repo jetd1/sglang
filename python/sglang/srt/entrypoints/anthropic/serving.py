@@ -43,6 +43,7 @@ from sglang.srt.entrypoints.anthropic.protocol import (
     ToolUseBlock,
     is_server_tool,
 )
+from sglang.srt.entrypoints.openai.chat_encoding import consumes_reasoning_content
 from sglang.srt.entrypoints.openai.protocol import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -354,10 +355,31 @@ class AnthropicServing:
             tool_text = str(content) if content else ""
             return tool_text, tool_text
 
+        # Some chat encoders consume assistant ``reasoning_content``
+        # natively when rendering history (e.g. Kimi K3's
+        # ``encoding_k3._render_assistant_segments`` places it inside the
+        # structural think channel using real special tokens). Those
+        # encoders render text parts into the visible content channel —
+        # K3 additionally encodes them with ``allow_special=False`` — so a
+        # re-wrapped history string would land as ordinary text inside the
+        # response channel, teaching the model to imitate marker-looking
+        # text in its visible output. Route history through
+        # ``reasoning_content`` instead and let the encoder apply its own
+        # structural wrapping and history-thinking policy.
+        native_reasoning_history = consumes_reasoning_content(
+            getattr(self.openai_serving_chat, "chat_encoding_spec", None)
+        )
+
         def _convert_assistant_thinking_blocks(
             blocks: list[AnthropicContentBlock],
         ) -> Optional[str]:
-            """Re-wrap prior-turn thinking blocks in the parser's own tokens.
+            """Collect prior-turn thinking history for replay.
+
+            Returns the joined raw thinking text when the model's chat
+            encoder consumes ``reasoning_content`` natively (see
+            ``chat_encoding.consumes_reasoning_content``), otherwise the
+            text re-wrapped in the parser's own think tokens for models
+            whose history renders as an inline text part.
 
             ``redacted_thinking`` carries encrypted bytes that no local
             parser can interpret, so we raise rather than silently drop it.
@@ -376,6 +398,9 @@ class AnthropicServing:
             ]
             if not thinking_parts:
                 return None
+
+            if native_reasoning_history:
+                return "\n".join(thinking_parts)
 
             try:
                 return self.openai_serving_chat.wrap_reasoning_history(
@@ -444,7 +469,15 @@ class AnthropicServing:
             if msg.role == "assistant":
                 reasoning_history = _convert_assistant_thinking_blocks(msg.content)
                 if reasoning_history is not None:
-                    content_parts.append({"type": "text", "text": reasoning_history})
+                    if native_reasoning_history:
+                        # Native path: the chat encoder renders this into the
+                        # structural think channel; nothing may leak into the
+                        # visible content parts.
+                        openai_msg["reasoning_content"] = reasoning_history
+                    else:
+                        content_parts.append(
+                            {"type": "text", "text": reasoning_history}
+                        )
 
             for block in msg.content:
                 # ``thinking``/``redacted_thinking`` blocks are surfaced via

@@ -1427,6 +1427,302 @@ class TestAnthropicServing(unittest.TestCase):
         )
 
 
+class TestKimiK3NativeReasoningHistory(unittest.TestCase):
+    """K3 thinking-history replay must use ``reasoning_content``, not text.
+
+    K3 has no Jinja template; ``encoding_k3._render_assistant_segments``
+    reads ``reasoning_content`` into the structural think channel and
+    renders every text part with ``allow_special=False``. A re-wrapped
+    ``<|open|>think<|sep|>...`` text part therefore becomes ordinary BPE
+    text inside the response channel and teaches the model to emit literal
+    marker text (thinking-replay contamination).
+
+    The gate is capability-based
+    (``chat_encoding.consumes_reasoning_content``): every encoding spec
+    whose renderer consumes ``reasoning_content`` natively takes this path
+    (kimi_k3, dsv4, dsv32, inkling); the default HF chat-template path
+    (spec ``None``) and unknown specs keep the wrapped-text fallback.
+    """
+
+    K3_MARKER_SUBSTRINGS = ("<|open|>", "<|close|>", "<|sep|>")
+
+    def _serving(self):
+        class _FakeK3OpenAIServingChat(_FakeOpenAIServingChat):
+            chat_encoding_spec = "kimi_k3"
+
+            def wrap_reasoning_history(self, text):
+                raise AssertionError(
+                    "wrap_reasoning_history must not be called on the "
+                    "kimi_k3 native reasoning-history path"
+                )
+
+        return AnthropicServing(_FakeK3OpenAIServingChat())
+
+    def _request(self, messages):
+        return AnthropicMessagesRequest.model_validate(
+            {
+                "model": "kimi-k3",
+                "max_tokens": 16,
+                "stream": False,
+                "messages": messages,
+            }
+        )
+
+    def _message_texts(self, message) -> list[str]:
+        content = message.content
+        if content is None:
+            return []
+        if isinstance(content, str):
+            return [content]
+        texts = []
+        for part in content:
+            text = (
+                part.get("text", "")
+                if isinstance(part, dict)
+                else getattr(part, "text", "") or ""
+            )
+            texts.append(text)
+        return texts
+
+    def test_thinking_history_sets_reasoning_content_not_text(self):
+        request = self._request(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "ponder"},
+                        {"type": "text", "text": "hello"},
+                    ],
+                },
+                {"role": "user", "content": "again"},
+            ]
+        )
+        chat_request = self._serving()._convert_to_chat_completion_request(request)
+        assistant = next(m for m in chat_request.messages if m.role == "assistant")
+        self.assertEqual(assistant.reasoning_content, "ponder")
+        # The visible content is exactly the text block — no prepended
+        # wrapped-thinking text part.
+        self.assertEqual(assistant.content, "hello")
+        # The field survives Pydantic round-trip (serving_chat does
+        # ``msg.model_dump()`` before handing messages to the encoder).
+        self.assertEqual(assistant.model_dump()["reasoning_content"], "ponder")
+
+    def test_no_marker_text_in_any_converted_content_part(self):
+        request = self._request(
+            [
+                {"role": "user", "content": "q1"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "reason a"},
+                        {"type": "text", "text": "answer"},
+                        {
+                            "type": "tool_use",
+                            "id": "call_1",
+                            "name": "get_x",
+                            "input": {"a": 1},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "call_1",
+                            "content": "result",
+                        }
+                    ],
+                },
+                {"role": "user", "content": "q2"},
+            ]
+        )
+        chat_request = self._serving()._convert_to_chat_completion_request(request)
+        for message in chat_request.messages:
+            for text in self._message_texts(message):
+                for marker in self.K3_MARKER_SUBSTRINGS:
+                    self.assertNotIn(
+                        marker,
+                        text,
+                        f"literal K3 marker {marker!r} leaked into "
+                        f"{message.role} content: {text!r}",
+                    )
+
+    def test_multiple_thinking_blocks_join_with_newline(self):
+        request = self._request(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "step one"},
+                        {"type": "thinking", "thinking": "step two"},
+                        {"type": "text", "text": "done"},
+                    ],
+                },
+                {"role": "user", "content": "next"},
+            ]
+        )
+        chat_request = self._serving()._convert_to_chat_completion_request(request)
+        assistant = next(m for m in chat_request.messages if m.role == "assistant")
+        self.assertEqual(assistant.reasoning_content, "step one\nstep two")
+        self.assertEqual(assistant.content, "done")
+
+    def test_messages_without_thinking_are_unchanged(self):
+        request = self._request(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "plain answer"}],
+                },
+                {"role": "user", "content": "more"},
+            ]
+        )
+        chat_request = self._serving()._convert_to_chat_completion_request(request)
+        assistant = next(m for m in chat_request.messages if m.role == "assistant")
+        self.assertIsNone(assistant.reasoning_content)
+        self.assertEqual(assistant.content, "plain answer")
+
+    def test_thinking_only_assistant_message_keeps_placeholder_content(self):
+        """A thinking-only turn still emits an assistant message (empty
+        content) so role alternation is preserved for the encoder."""
+        request = self._request(
+            [
+                {"role": "user", "content": "q"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "thinking", "thinking": "only thoughts"}],
+                },
+                {"role": "user", "content": "r"},
+            ]
+        )
+        chat_request = self._serving()._convert_to_chat_completion_request(request)
+        assistant = next(m for m in chat_request.messages if m.role == "assistant")
+        self.assertEqual(assistant.reasoning_content, "only thoughts")
+        self.assertEqual(assistant.content, "")
+
+    def test_thinking_with_tool_use_sets_reasoning_on_tool_call_message(self):
+        request = self._request(
+            [
+                {"role": "user", "content": "q"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "tool time"},
+                        {
+                            "type": "tool_use",
+                            "id": "c1",
+                            "name": "f",
+                            "input": {},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "c1",
+                            "content": "ok",
+                        }
+                    ],
+                },
+            ]
+        )
+        chat_request = self._serving()._convert_to_chat_completion_request(request)
+        assistant = next(m for m in chat_request.messages if m.role == "assistant")
+        self.assertEqual(assistant.reasoning_content, "tool time")
+        self.assertTrue(assistant.tool_calls)
+
+    def test_redacted_thinking_still_rejected_on_k3_path(self):
+        request = self._request(
+            [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "redacted_thinking", "data": "opaque"}],
+                },
+                {"role": "user", "content": "follow-up"},
+            ]
+        )
+        with self.assertRaises(ValueError):
+            self._serving()._convert_to_chat_completion_request(request)
+
+    def test_all_native_specs_route_thinking_via_reasoning_content(self):
+        """Every encoder that consumes ``reasoning_content`` natively takes
+        the native path — not just kimi_k3. dsv4/dsv32 render it through
+        their ``thinking_template`` slot and inkling renders it as a
+        first-class thinking message; a pre-wrapped text part would bypass
+        those renderers' own history-thinking policy."""
+        for spec in ("kimi_k3", "dsv4", "dsv32", "inkling"):
+            with self.subTest(spec=spec):
+
+                class _FakeNativeSpecServingChat(_FakeOpenAIServingChat):
+                    chat_encoding_spec = spec
+
+                    def wrap_reasoning_history(self, text):
+                        raise AssertionError(
+                            "wrap_reasoning_history must not be called for "
+                            f"native-reasoning spec {spec!r}"
+                        )
+
+                serving = AnthropicServing(_FakeNativeSpecServingChat())
+                request = self._request(
+                    [
+                        {"role": "user", "content": "hi"},
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "thinking", "thinking": "ponder"},
+                                {"type": "text", "text": "hello"},
+                            ],
+                        },
+                        {"role": "user", "content": "again"},
+                    ]
+                )
+                chat_request = serving._convert_to_chat_completion_request(request)
+                assistant = next(
+                    m for m in chat_request.messages if m.role == "assistant"
+                )
+                self.assertEqual(assistant.reasoning_content, "ponder")
+                self.assertEqual(assistant.content, "hello")
+
+    def test_non_native_specs_still_use_wrap_reasoning_history(self):
+        """Regression guard: the default HF chat-template path (spec None)
+        and specs outside the native-reasoning allowlist keep the
+        wrapped-text-part behavior (their templates render assistant
+        content, and the wrap markers match their parser)."""
+
+        class _FakeUnknownSpecServingChat(_FakeOpenAIServingChat):
+            chat_encoding_spec = "some_future_spec"
+
+        for fake in (_FakeOpenAIServingChat(), _FakeUnknownSpecServingChat()):
+            with self.subTest(spec=getattr(fake, "chat_encoding_spec", None)):
+                serving = AnthropicServing(fake)
+                request = self._request(
+                    [
+                        {"role": "user", "content": "hi"},
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "thinking", "thinking": "ponder"},
+                                {"type": "text", "text": "hello"},
+                            ],
+                        },
+                        {"role": "user", "content": "again"},
+                    ]
+                )
+                chat_request = serving._convert_to_chat_completion_request(request)
+                assistant = next(
+                    m for m in chat_request.messages if m.role == "assistant"
+                )
+                self.assertIsNone(assistant.reasoning_content)
+                joined = "\n".join(self._message_texts(assistant))
+                self.assertIn("<think>", joined)
+                self.assertIn("ponder", joined)
+
+
 class TestDetectInlineSystemSupport(unittest.TestCase):
     """Chat-template detection for mid-conversation system messages (#28883)."""
 
