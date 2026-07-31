@@ -284,7 +284,10 @@ class ServingChatTestCase(unittest.TestCase):
         self.assertEqual(response.usage.total_tokens, 2073)
         self.assertEqual(response.usage.prompt_tokens_details.image_tokens, 2035)
 
-    def test_kimi_k3_rejects_internal_placeholder_in_user_text(self):
+    def test_kimi_k3_neutralizes_internal_placeholder_in_user_text(self):
+        # Since #33003, a literal placeholder in user text is escaped instead of
+        # rejected: images arrive out of band as structured image_url parts, so
+        # the literal token in text is ordinary user content.
         message = {
             "role": "user",
             "content": [
@@ -295,8 +298,12 @@ class ServingChatTestCase(unittest.TestCase):
             ],
         }
 
-        with self.assertRaisesRegex(ValueError, "reserved for Kimi-K3 image input"):
-            self.chat._flatten_kimi_k3_content(message, [], [], [])
+        new_msg = self.chat._flatten_kimi_k3_content(message, [], [], [])
+        parts = new_msg["content"]
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0]["type"], "text")
+        self.assertNotIn("<|kimi_image_placeholder|>", parts[0]["text"])
+        self.assertIn("<| kimi_image_placeholder |>", parts[0]["text"])
 
     def test_kimi_tool_call_keeps_default_reasoning(self):
         self.template_manager.reasoning_config = ReasoningToggleConfig(
