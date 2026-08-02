@@ -279,7 +279,6 @@ class DeepSeekV4ReasoningDetector(Qwen3Detector):
         return StreamingParseResult(normal_text=current)
 
     # ------------------------------------------------------------------
-    @staticmethod
     def finish(self) -> StreamingParseResult:
         """End-of-stream DSML flush guard.
 
@@ -307,6 +306,7 @@ class DeepSeekV4ReasoningDetector(Qwen3Detector):
                 )
         return super().finish()
 
+    @staticmethod
     def _carve_dsml(text: str) -> tuple[str, str]:
         """Split `text` (a finalized reasoning slice) into (reasoning_part,
         normal_part) by carving out any complete DSML tool_call blocks.
