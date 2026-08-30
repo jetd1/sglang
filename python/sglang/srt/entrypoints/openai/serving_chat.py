@@ -247,7 +247,15 @@ class OpenAIServingChat(OpenAIServingBase):
             hasattr(self.tokenizer_manager.model_config, "hf_config")
             and hasattr(self.tokenizer_manager.model_config.hf_config, "model_type")
             and self.tokenizer_manager.model_config.hf_config.model_type
-            in ("gemma4", "gemma4_unified")
+            # DiffusionGemma shares the Gemma4 thought-channel wire format
+            # (<|channel>thought ... <channel|>); without keeping the special
+            # tokens, detokenization strips the channel markers before the
+            # gemma4 reasoning parser ever sees them: with thinking disabled
+            # the model's empty-channel opener leaks as a literal "thought"
+            # prefix in the text, and with thinking enabled the whole reply
+            # (reasoning + answer) collapses into reasoning_content because
+            # the closing <channel|> is invisible to the parser.
+            in ("gemma4", "gemma4_unified", "diffusion_gemma")
         )
 
         # Which Python-based chat encoder (if any) bypasses apply_chat_template.
