@@ -210,6 +210,29 @@ class SchedulerDllmMixin:
         if fdfo_mode and req.dllm_incomplete_ids:
             return
 
+        # 2026-08-30 fix: dLLM rounds skipped SWA window maintenance. Without
+        # this, a large context fills the entire SWA pool (sized for
+        # max_running x window), starving all requests; the AR path does this
+        # per extend chunk via ScheduleBatch._evict_swa.
+        if (
+            req.kv is not None
+            and getattr(self.tree_cache, "supports_swa", None)
+            and self.tree_cache.supports_swa()
+        ):
+            from sglang.srt.mem_cache.common import (
+                free_swa_out_of_window_slots,
+            )
+
+            free_swa_out_of_window_slots(
+                req,
+                req.kv.kv_allocated_len,
+                sliding_window_size=self.tree_cache.sliding_window_size,
+                page_size=self.tree_cache.page_size,
+                req_to_token_pool=self.req_to_token_pool,
+                token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+                is_chunk_cache=True,
+            )
+
         if req.is_dllm_prefill():
             self.stash_chunked_request(req)
         elif self.dllm_config.requires_separate_context_encoding:
