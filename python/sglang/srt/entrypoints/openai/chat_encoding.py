@@ -104,6 +104,35 @@ def resolve_dsv4_reasoning_effort_profile(
         or "preview"
     )
 
+# Encoding specs whose renderers consume assistant ``reasoning_content``
+# directly when rendering conversation history:
+#   kimi_k3  -> encoding_k3._render_assistant_segments (structural think channel)
+#   dsv4     -> encoding_dsv4.render_message (thinking_template slot)
+#   dsv32    -> encoding_dsv32 render path (thinking_template slot)
+#   inkling  -> inkling_renderer (first-class thinking message)
+# For these encoders, adapters replaying prior-turn thinking must put it in
+# ``reasoning_content`` rather than re-wrapping it into a text part: their
+# renderers place text parts in the visible content channel (kimi_k3 and
+# inkling additionally encode them without special-token parsing, turning
+# wrapped think markers into literal text the model then imitates), and a
+# pre-wrapped text part bypasses the encoder's own history-thinking policy
+# (e.g. dsv4/dsv32 drop-thinking rules).
+SPECS_WITH_NATIVE_REASONING_HISTORY = frozenset({"kimi_k3", "dsv4", "dsv32", "inkling"})
+
+
+def consumes_reasoning_content(spec: Optional[str]) -> bool:
+    """Whether ``spec``'s encoder renders assistant ``reasoning_content`` itself.
+
+    True means adapters must hand replayed thinking history to the encoder
+    via the message's ``reasoning_content`` field and must not render it
+    into a text part themselves. False (including ``spec=None``, the default
+    HF chat-template path) means the encoder has no native slot and callers
+    keep the wrapped-text fallback.
+    """
+    return spec in SPECS_WITH_NATIVE_REASONING_HISTORY
+
+
+
 
 def resolve_chat_encoding_spec(
     *,
