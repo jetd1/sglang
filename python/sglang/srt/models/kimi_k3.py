@@ -2814,6 +2814,28 @@ class KimiK3LinearForCausalLM(nn.Module):
         self.capture_aux_hidden_states = True
         self.model.dspark_layers_to_capture = list(layer_ids)
 
+    def set_dflash_layers_to_capture(self, layer_ids: list[int]) -> None:
+        """DFLASH aux hidden capture — same collection contract as DSPARK.
+
+        Reuses the dspark capture list: the forward loop appends per-layer
+        hidden states whenever i is in the list, and returns
+        (hidden_states, aux_hidden_states) when capture is enabled.
+        target_layer_ids from the draft config are 0-based decoder-layer
+        loop indices (no +1 shift needed, unlike DeepSeek's embedding-at-0).
+        """
+        if self.pp_group.world_size > 1:
+            raise NotImplementedError(
+                "DFLASH aux hidden capture requires PP=1."
+            )
+        if not self.pp_group.is_last_rank:
+            return
+        if layer_ids is None:
+            raise ValueError(
+                "DFLASH requires explicit layer_ids for aux hidden capture."
+            )
+        self.capture_aux_hidden_states = True
+        self.model.dspark_layers_to_capture = list(layer_ids)
+
     @torch.no_grad()
     def forward(
         self,
@@ -3232,6 +3254,13 @@ class KimiK3ForConditionalGeneration(nn.Module):
                 "DSPARK layer capture is not available in encoder-only mode"
             )
         self.language_model.set_dspark_layers_to_capture(layer_ids)
+
+    def set_dflash_layers_to_capture(self, layer_ids: list[int]) -> None:
+        if self.language_model is None:
+            raise AttributeError(
+                "DFLASH layer capture is not available in encoder-only mode"
+            )
+        self.language_model.set_dflash_layers_to_capture(layer_ids)
 
     def preprocess_mm_for_encoder(
         self,

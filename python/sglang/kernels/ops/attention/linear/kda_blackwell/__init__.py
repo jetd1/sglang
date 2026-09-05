@@ -63,8 +63,23 @@ def _kda_workspace(q, T, Hv, K, V, cu_seqlens):
     # sync; within one forward all KDA layers share the same cu_seqlens object).
     if ws is None or ws["cu"] is not cu_seqlens:
         ci, co, tcs, total = prepare_metadata(cu_seqlens)
+        # [K3PATCH-EMPTYSEQ] compact zero-chunk seqs out of the per-seq arrays:
+        # empty-seq CTAs deadlock the h-kernel's TMA/compute barrier handshake,
+        # their -1 pool slots fault the H0/HT TMA, and the FLA kkt mis-computes
+        # real tokens when cu_seqlens carries zero-length seqs. Empty seqs hold
+        # no tokens/chunks, so token/chunk-indexed tensors stay valid.
+        _lens = cu_seqlens[1:].to(torch.int64) - cu_seqlens[:-1].to(torch.int64)
+        _keep = (_lens > 0).nonzero(as_tuple=True)[0]
+        if _keep.shape[0] == _lens.shape[0]:
+            keep = None  # fast path: no empties
+            cu_c, co_c = cu_seqlens, co
+        else:
+            keep = _keep
+            cu_c = torch.cat((cu_seqlens[:1], cu_seqlens[1:][_keep]))
+            co_c = torch.cat((co[:1], co[1:][_keep]))
     else:
         ci, co, tcs, total = ws["ci"], ws["co"], ws["tcs"], ws["total"]
+        keep, cu_c, co_c = ws.get("keep"), ws.get("cu_c"), ws.get("co_c")
     pad_t = total * 64
 
     if ws is None or ws["Tcap"] < T or ws["padcap"] < pad_t or ws["totalcap"] < total:
@@ -88,6 +103,7 @@ def _kda_workspace(q, T, Hv, K, V, cu_seqlens):
         _KDA_WS[key] = ws
 
     ws["ci"], ws["co"], ws["tcs"], ws["total"] = ci, co, tcs, total
+    ws["keep"], ws["cu_c"], ws["co_c"] = keep, cu_c, co_c  # K3PATCH-EMPTYSEQ
 
     # eye is the one-hot(chunk-position) identity injection: recompute only on a
     # cu_seqlens change. Clear the prior high-water region then scatter the new 1s.
@@ -189,7 +205,7 @@ def chunk_kda_cutedsl(
         gk_scale=RCP_LN2,
         beta=ones_beta,
         scale=float(scale),
-        cu_seqlens=cu_seqlens,
+        cu_seqlens=ws["cu_c"] if ws.get("keep") is not None else cu_seqlens,  # K3PATCH-EMPTYSEQ: FLA kkt wrong on empty seqs
         chunk_size=64,
     )
 
@@ -229,6 +245,11 @@ def chunk_kda_cutedsl(
         # Pool mode: read and write the pool rows in place.
         ht = h0
         state_indices = h0_indices
+    if ws.get("keep") is not None:  # K3PATCH-EMPTYSEQ: drop empty seqs (+ their -1 slots)
+        _si_h = state_indices[ws["keep"]]
+        _cu_h, _co_h = ws["cu_c"], ws["co_c"]
+    else:
+        _si_h, _cu_h, _co_h = state_indices, cu_seqlens, chunk_offsets
     kda_h_cutedsl(
         KR,
         U,
@@ -238,9 +259,9 @@ def chunk_kda_cutedsl(
         h_chunks,
         h0,
         ht,
-        cu_seqlens,
-        chunk_offsets,
-        state_indices,
+        _cu_h,
+        _co_h,
+        _si_h,
     )
 
     o = q.new_empty(T, Hv, V, dtype=torch.bfloat16)
