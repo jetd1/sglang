@@ -1973,10 +1973,17 @@ class OpenAIServingChat(OpenAIServingBase):
         history_tool_calls_cnt: int,
     ) -> str:
         """Process for generating a new and unique `tool_call_id`"""
-        if self.tool_call_parser == "kimi_k3":
-            return f"{call_item.name}:{history_tool_calls_cnt + call_item.tool_index}"
         if self.tool_call_parser != "kimi_k2":
             # A simple uuid is sufficient for all models except for Kimi-K2.
+            #
+            # Kimi-K3 included: unlike K2, the K3 XTML wire format carries no id
+            # field at all, so the parser derives `tool_index` positionally and
+            # the K3 chat encoding treats tool_call_id as opaque. A positional
+            # id derives from the *client-supplied* history's tool call count,
+            # so any client that truncates or replays that history makes the
+            # server mint an id that already exists earlier in the conversation
+            # (id-based dedup then freezes the request loop; prod incident
+            # 2026-08-02, 60+ byte-identical iterations). Upstream PR #33343.
             tool_call_id = f"call_{uuid.uuid4().hex[:24]}"
             return tool_call_id
         tool_call_id = (
