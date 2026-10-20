@@ -36,7 +36,16 @@ def _get_param_type(func_name: str, param_name: str, tools: List[Tool]) -> str:
         if tool.function.name == func_name:
             props = get_schema_properties(tool.function.parameters)
             if param_name in props:
-                return props[param_name].get("type", "string")
+                ptype = props[param_name].get("type", "string")
+                # FIX-detector-union-type-20261020: JSON Schema allows "type"
+                # to be a union array (e.g. ["string","null"]); first non-null
+                # member wins, only-null falls back to string.
+                if isinstance(ptype, (list, tuple)):
+                    ptype = next(
+                        (t for t in ptype if isinstance(t, str) and t != "null"),
+                        "string",
+                    )
+                return ptype
     return "string"
 
 
