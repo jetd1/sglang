@@ -9,8 +9,14 @@ guards are retained, while the independent logprob consumer change from
 `04d1bda93308b4aeb6d0c625033f650da6b3be16` is deliberately excluded.
 Only the SM120 attention wrapper differs from the reconstructed original grid-A
 runtime. No observer, alternative Triton selector or minimal-ablation switches
-are included. Four earlier synthetic GPU cases support this wrapper correction;
-the new original-grid-A versus fixed online-B300 ABC round has not run.
+are included. Four earlier synthetic GPU cases support this wrapper correction.
+The separate original-grid-A versus fixed online-B300 ABC round subsequently
+completed30 true transport terminals using immutable runtime commit
+`3ab63b23fe3312570cdb8780ed56439cf917a14e` and bundle
+`05f053110ec3efb15f822cfffb47765637c319741515bfdb36321c394b029fee`.
+**Output quality acceptance remains unpassed**; see the bounded outcome below.
+This documentation update does not change that runtime pin or advance any
+shared deployment/production reference.
 Do **not** `pip install` this checkout or serve from its generic `python/` tree.
 
 ## Baseline and contents
@@ -184,8 +190,9 @@ not execute the splitter kernels or native attention. A first numerical probe
 attempt expired before usable container/output evidence, so its infrastructure
 failure supplies no GPU correctness result. A separately approved child process
 then completed the frozen four-case single-GPU numerical comparison described
-below. Full-model and long-task gates remain pending; no candidate server or
-production deployment is implied.
+below. That numerical receipt alone supplies no full-model or long-task result;
+the subsequently completed independent full-model round is described separately
+and did not pass output-quality acceptance.
 
 Single-GPU synthetic validation on 2026-11-07 used the pinned image's PyTorch
 2.13.0+cu130 / CUDA13.0, FlashInfer0.6.18 and AOT binary SHA
@@ -243,6 +250,52 @@ CPU tests do not validate CUDA D2H, kernel execution, GPU memory, distributed
 scheduling, DSPARK serving, long-input quality or native Messages end-to-end.
 Before production rollout, separately validate the approved single-worker
 experiment, then drain/switch/check one B300 arm at a time; stop on failure.
+
+## Separate full-model observation: not quality acceptance
+
+On 2026-11-07 the original-grid-A serving posture, with only this extra-slot/count
+runtime correction relative to the reconstructed original A, was compared with
+one fixed online B300 worker. Five serial alternating rounds of original ABC
+bodies completed30 HTTP200/message-stop terminals, five per payload per side.
+Only the model mapping changed; original request fields were retained with no
+sampling/seed/diagnostic injection, tool execution, retries or cache flushes.
+The running candidate remained pinned to3ab63b23fe3312570cdb8780ed56439cf917a14e;
+this later README change is not a new runtime deployment.
+
+| Side / payload | Scoped reasonable next actions | Unreasonable visible actions |
+| --- | ---: | ---: |
+| Original-grid-A only-extra / A | 2 | 3 |
+| Original-grid-A only-extra / B | 3 | 2 |
+| Original-grid-A only-extra / C | 5 | 0 |
+| Fixed online B300 / A | 4 | 1 |
+| Fixed online B300 / B | 5 | 0 |
+| Fixed online B300 / C | 4 | 1 |
+
+Reasonable here means only a grounded, in-scope next action, often reconnaissance;
+it is not completed work or an output-quality acceptance rate. Each output was
+judged against its own original context and tool schema, not another platform's
+answer, and hidden thinking was not scored. One candidate-A initial reasonable
+judgment was explicitly held and corrected by an independent reread: absence of
+an end event in a fixed window does not establish a definite outside-window end
+or unique cutoff cause. The original output and initial-to-held-to-corrected
+review chain were retained rather than silently rewritten.
+
+Both platforms still made source-grounding errors. The numerical slot/count
+correction is verified within its earlier synthetic scope, but the long-task
+quality issue is **not resolved**. There was no contemporaneous uncorrected
+original-A arm, and process seeds, natural prefix/HiCache histories, TP/EP,
+capacity and online traffic were not aligned. The new process kept original
+argv behavior rather than forcing the old generated seed. These results do not
+prove a fix-caused semantic gain, a stable success rate or cold-input speedup.
+
+Final worker identities/restart counts/full resolved configurations and health
+were unchanged, and the generation window was released after30 terminal calls.
+No shared production/deployment source reference was promoted. The detailed
+five-round/30-step request, cache, output-length/content, timing, service and
+bounded-review record is in `jetd1/llm-deploy`,
+`dsv41/pro6k-grida-onlyfix-20261107/RESULTS.md`; private originals remain outside
+this public source tree. Full-result small-receipt SHA256:
+`2f050c6ba7dd0842f583cb6723f0c6c49344ade1bd0f52b3a09b18d3abf2a4d2`.
 
 ## Rollback
 
