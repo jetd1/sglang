@@ -1,5 +1,5 @@
 {
-  "overlay_version": "2026-11-07.2-sm120-extra-slots-candidate",
+  "overlay_version": "2026-11-07.3-original-grid-A-only-extra-fix",
   "runtime": {
     "image": "docker.io/lmsysorg/sglang@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82182cb618cc82b588816349",
     "accepted_image_digests": [
@@ -18,9 +18,10 @@
   "provenance": {
     "repository_base": "32c3513816b0e4ecb4d0fd4e8d630ea30e0d8ffc",
     "source": "Complete package file hashes recovered from the immutable source layer, not from a claimed git checkout.",
-    "consumer_fix": "c3e375fe6a8e7c5932f563a8ae81cdff030d548c; Tensor-only normalization, adapted onto the image-matched consumer.",
+    "consumer_fix": "Intentionally excluded from this experiment. The original immutable-image/grid-A consumer is restored byte-for-byte; no selected-token logprob request is part of this comparison.",
     "guard_files": "Inherited parser/environ guard, byte-identical across B300 v5 and PRO6K v6 at capture; only guard additions relative to the pinned image.",
-    "sm120": "Candidate based on dd3618209ea01705d07f36ecf56b24a2f536743c: preserve extra-pool footer reblock and independent buffer, remove incorrect token-slot expansion and candidate-length multiplication. Real-adapter CPU regression and four frozen single-GPU synthetic prefill cases verified; full-model and long-task validation still required. Optional strict decode-indexer shim unchanged."
+    "sm120": "Original grid-A wrapper plus only the verified correction preserving linear extra token slots and candidate counts. Footer reblock and independent extra buffer are retained. Corrected wrapper is byte-identical to04d1bda93308b4aeb6d0c625033f650da6b3be16; no observer or backend substitution.",
+    "original_grid_A": "Static reconstruction from the same immutable image plus archived original grid-A entrypoint f5c529dd08e353bdd4e6c404358230a45ad1b368cbec0ffe6f960140e6281b12 and extra patch37accef14d081fdf0d3075be209507f05ae06de8e41759509c09accdc095971b; original process full-tree hash was not captured. Existing parser/environ guards unchanged."
   },
   "baseline_tree_sha256": "30734fcb37ec782e7c215ec79058dbd3c71a4a0c35ae214297db3f5c6bbc0779",
   "baseline_files": {
@@ -8574,7 +8575,7 @@
     "srt/managers/schedule_policy.py": "0e45c0bd4648998fb9dbf3d903380521bd7911941ce96b501e89c1b395861d9d",
     "srt/managers/scheduler.py": "a27879971d17033955847d79b2e6ebc5604da419fe6ffee43c5c107479ffc97e",
     "srt/managers/scheduler_components/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "srt/managers/scheduler_components/batch_result_processor.py": "9bd6b43a27baef7d8a0096436fddea6c6839c637f0e8e52412720ffe7ebc31fc",
+    "srt/managers/scheduler_components/batch_result_processor.py": "734bb2f479b14d9f36f1645807b81033a2d5b74a539bac853f5e48e3f089b688",
     "srt/managers/scheduler_components/dp_attn.py": "7b8f8adc737eba4f812018a944ee7642da8380521c22476fa5bae58002baf410",
     "srt/managers/scheduler_components/dynamic_chunk_sizer.py": "d0023fffdd61fff9f426d9ffb1e2186aabb1c693b6a6125ed194c74ccbf2f0cf",
     "srt/managers/scheduler_components/flush_wrapper.py": "5adbcdccd5fd6de5760735126fb83f9f578ea6d2d77c14dad374213ae0f2a925",

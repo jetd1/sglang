@@ -66,9 +66,12 @@ class TestOverlayPackage(CustomTestCase):
         common = overlay.desired_files(manifest, "b300", None)
         sm120 = overlay.desired_files(manifest, "sm120", "off")
         shim = overlay.desired_files(manifest, "sm120", "on")
-        # Every architecture receives the common guard AND the batch fix;
-        # architecture files can never overwrite the consumer later in boot.
+        # The experiment preserves grid A's original consumer; only its
+        # attention profile changes, and no architecture can replace this file.
         consumer = "srt/managers/scheduler_components/batch_result_processor.py"
+        self.assertEqual(
+            manifest["runtime_files"][consumer], manifest["baseline_files"][consumer]
+        )
         self.assertEqual(common[consumer], sm120[consumer])
         self.assertEqual(common[consumer], shim[consumer])
         backend = "srt/layers/attention/deepseek_v4_backend.py"
@@ -82,17 +85,21 @@ class TestOverlayPackage(CustomTestCase):
             with self.assertRaises(ValueError):
                 overlay.desired_files(manifest, profile, value)
 
-    def test_install_profiles_and_detect_late_consumer_overwrite(self):
+    def test_install_profiles_preserves_consumer_and_detects_late_drift(self):
         manifest = overlay.load_manifest()
         consumer = "srt/managers/scheduler_components/batch_result_processor.py"
-        fixed = (ROOT / "runtime-overlay/sglang" / consumer).read_text()
-        original = fixed.replace(
-            "v.tolist() if isinstance(v, torch.Tensor) else v\n"
-            "                    for v in logits_output.next_token_token_ids_logprobs_val",
-            "v.tolist() for v in logits_output.next_token_token_ids_logprobs_val",
+        original_consumer = (ROOT / "runtime-overlay/sglang" / consumer).read_bytes()
+        self.assertEqual(
+            overlay.sha256(original_consumer), manifest["baseline_files"][consumer]
+        )
+        environment = "srt/environ.py"
+        guarded = (ROOT / "runtime-overlay/sglang" / environment).read_text()
+        original_environment = guarded.replace(
+            "    SGLANG_TOOL_CALL_BUFFER_LIMIT = EnvInt(256 * 1024)\n", ""
         )
         self.assertEqual(
-            overlay.sha256(original.encode()), manifest["baseline_files"][consumer]
+            overlay.sha256(original_environment.encode()),
+            manifest["baseline_files"][environment],
         )
         digest = manifest["runtime"]["accepted_image_digests"][0]
         for profile, shim in (("b300", None), ("sm120", "off"), ("sm120", "on")):
@@ -105,11 +112,10 @@ class TestOverlayPackage(CustomTestCase):
                         symlinks=True,
                         ignore=shutil.ignore_patterns("__pycache__"),
                     )
-                    target = root / consumer
-                    target.write_text(original)
+                    environment_target = root / environment
+                    environment_target.write_text(original_environment)
                     cache = (
-                        target.parent
-                        / "__pycache__/batch_result_processor.synthetic.pyc"
+                        environment_target.parent / "__pycache__/environ.synthetic.pyc"
                     )
                     cache.parent.mkdir(exist_ok=True)
                     cache.write_bytes(b"synthetic stale bytecode")
@@ -117,8 +123,10 @@ class TestOverlayPackage(CustomTestCase):
                     first = overlay.apply_overlay(
                         root, manifest, desired, image_digest=digest
                     )
-                    self.assertEqual(target.read_text(), fixed)
+                    self.assertEqual(environment_target.read_text(), guarded)
                     self.assertFalse(cache.exists())
+                    target = root / consumer
+                    self.assertEqual(target.read_bytes(), original_consumer)
                     self.assertEqual(
                         overlay.apply_overlay(
                             root, manifest, desired, image_digest=digest
@@ -128,9 +136,9 @@ class TestOverlayPackage(CustomTestCase):
                     overlay.apply_overlay(
                         root, manifest, desired, image_digest=digest, verify=True
                     )
-                    # A legacy late copy must fail final verification, not hide
-                    # the new consumer behind a previously successful install.
-                    target.write_text(original)
+                    target.write_bytes(
+                        original_consumer + b"\n# synthetic late drift\n"
+                    )
                     with self.assertRaisesRegex(
                         ValueError, "batch_result_processor.py"
                     ):

@@ -1,15 +1,17 @@
 # DeepSeek V4.1 Flash deployment overlay
 
-This directory is the deployment source, independent of the repository's generic
-`python/` tree. This revision is an **offline sm120 candidate**, based on the
-validated `deploy/deepseek-v4.1-flash-overlay` baseline commit
-`dd3618209ea01705d07f36ecf56b24a2f536743c`. Package the candidate from its own
-`odin/deepseek-sm120-extra-slots-fix-3` branch and pin an immutable commit;
-the shared deployment branch and production references have not been advanced.
-Four frozen single-GPU synthetic prefill cases satisfy their numerical criteria;
-isolated full-model/long-task gates remain unpassed. Do **not** `pip install`
-this checkout, put its generic `python/` on the serving `PYTHONPATH`,
-or use an older DeepSeek branch as a replacement for this runtime.
+This directory is the complete image-pinned source for an **isolated original
+grid-A experiment with only the extra token-slot/count correction**. It is not
+the shared production deployment branch. This candidate is prepared on
+`odin/pro6k-grida-only-extra-fix-1107-5`; deployments must pin its final immutable
+commit and bundle, never a floating branch. The original grid-A parser/environ
+guards are retained, while the independent logprob consumer change from
+`04d1bda93308b4aeb6d0c625033f650da6b3be16` is deliberately excluded.
+Only the SM120 attention wrapper differs from the reconstructed original grid-A
+runtime. No observer, alternative Triton selector or minimal-ablation switches
+are included. Four earlier synthetic GPU cases support this wrapper correction;
+the new original-grid-A versus fixed online-B300 ABC round has not run.
+Do **not** `pip install` this checkout or serve from its generic `python/` tree.
 
 ## Baseline and contents
 
@@ -45,25 +47,32 @@ This is not a claim that the issue was never fixed before.
 
 | Location | Change | Origin / scope |
 | --- | --- | --- |
-| `srt/managers/scheduler_components/batch_result_processor.py` | Convert selected-token logprob rows only when they are Tensors, in both prefill and decode | Reuses the existing normalization convention and CPU regression from `c3e375fe6a8e7c5932f563a8ae81cdff030d548c`; all other consumer bytes retained |
+| `srt/managers/scheduler_components/batch_result_processor.py` | No change from the immutable image / original grid A | Deliberately excludes the separate Tensor/list logprob guard; original consumer SHA734bb2f4 remains fixed, and no logprob request is part of this experiment |
 | `srt/function_call/function_call_parser.py` | Bound held streaming text, flush it and latch parsing off after the guard fires | Existing B300 v5 / PRO6K v6 parser guard, byte-identical between those captured deployments |
 | `srt/environ.py` | Declare `SGLANG_TOOL_CALL_BUFFER_LIMIT` | Existing guard, no upstream fields removed |
 | `profiles/sm120/kernels/ops/attention/flash_mla_sm120.py` | Extra-pool footer reblock and separate buffer; preserve token-slot indices and candidate counts | Inherited page-layout adaptation plus a minimal candidate correction: remove incorrect index expansion and length multiplication; no numerical/quality acceptance claimed |
 | `profiles/sm120-shim/srt/layers/attention/deepseek_v4_backend.py` | Strict decode-indexer metadata shim | Existing optional shim; only selected with explicit `--sm120-shim on` |
 
-There are exactly three changed regular files in the common tree. The remaining
-baseline package files are retained byte-for-byte. Profile overrides never
-replace the consumer, parser, or environment file.
+There are exactly two changed regular files in the common tree: the original
+grid-A parser/environ guards. All other common bytes, including the consumer,
+are the immutable-image bytes. Profile overrides never replace these files.
 
-The logprob regression proves a consumer contract defect, not the identity of
-the live failing batch's list rows and **not** the cause or cure of PRO6K output
-quality differences. The inherited decode-indexer shim is unchanged. The sm120
-candidate corrects a separate source/native token-slot/count contract, not the
-logprob defect: FlashInfer 0.6.18 consumes linear token slots and candidate counts,
-while footer reblocking preserves those units. Expanding a slot by the page
-split ratio or multiplying its length changes the gathered keys. The footer
-splitter and its independent extra buffer remain necessary and are retained.
-This changes only the sm120 profile; the complete common/B300 source is unchanged.
+Relative to the image, grid A already had the necessary extra-pool footer
+reblocking and independent buffer. This candidate changes only the incorrect
+slot expansion and candidate-length multiplication in that existing wrapper.
+FlashInfer 0.6.18 consumes linear token slots and candidate counts; footer
+reblocking preserves those units. The splitter and its independent extra buffer
+remain. The known independent logprob defect is intentionally not fixed here;
+this experiment is not a recommended general-purpose production overlay.
+
+Original grid-A expected tree, statically reconstructed from the immutable image
+and archived entrypoint/patches (not a historical full-process tree capture):
+`fa272e98e0b59f92f0d547058c69a0c0fb0b72acdc41a9eba073607a17036d32`.
+The only-extra SM120/shim-off expected tree is
+`ddd83ee3b207c7b8ccc2647e861afefeac51ed36205f7d5bb36c22b4610f5ef5`.
+Serving DSPARK/cache/graphs/overlap/SWA settings are restored from original grid
+A in the deployment manifest, not from the later minimal condition. Fresh
+process startup does not restore the original GPU/KV/RNG state.
 
 ## Runtime compatibility and profiles
 
@@ -151,14 +160,16 @@ Run the focused regression against the complete common tree, with the pinned
 runtime's test dependencies or a separately recorded CPU environment:
 
 ```bash
-PYTHONPATH=runtime-overlay python3 -m pytest -q tests/test_logprob_rows.py tests/test_overlay.py tests/test_sm120_extra_slots.py
+PYTHONPATH=runtime-overlay python3 -m pytest -q tests/test_overlay.py tests/test_sm120_extra_slots.py
 ```
 
-The selected-token regression uses the real producer, output object and both
-normalization helpers. It covers mixed optional rows, all-Tensor rows, already
-materialized lists, order, selected-token indices and list-row identity. It
-fails on the unmodified image consumer. Installer tests cover fail-before-write,
-profile selection and full-bundle reproducibility/completeness.
+The package tests require the original consumer bytes to be retained and reject
+late consumer drift. Installer tests also cover fail-before-write, explicit
+profile selection, cache invalidation on changed files and complete reproducible
+archives. The historical `tests/test_logprob_rows.py` remains in the checkout as
+evidence of the intentionally uncorrected original consumer contract, but is not
+shipped in this experiment bundle or represented as passing here. Do not request
+logprobs to probe that unrelated defect during the original-payload comparison.
 
 The candidate's additional CPU regression executes the actual prefill adapter
 function from this profile with real torch index/length operations. Only the
@@ -166,7 +177,9 @@ GPU page-copy and native attention boundary are replaced; it is not a handwritte
 translation of the index formula. PBS128/256, absent/present candidate lengths,
 negative padding and a final legal pool slot fail in four subcases before the
 minimal change and pass after it. It also checks the independent extra buffer key.
-Candidate deployment tests: 8 passed, 19 subtests passed. CPU boundary tests do
+The earlier candidate's deployment tests passed8 with19 subtests; that result
+includes a logprob guard not present in this experiment and is not its test count.
+CPU boundary tests do
 not execute the splitter kernels or native attention. A first numerical probe
 attempt expired before usable container/output evidence, so its infrastructure
 failure supplies no GPU correctness result. A separately approved child process
@@ -208,7 +221,9 @@ No CPU out-of-bounds fixture was sent to the GPU. Raw synthetic inputs, per-mode
 outputs and references were saved before advancing; result SHA256 is
 `247f172bafd80815b8fa50d719dd150e45a90fc1e12a53c9bfba5ae23ad625a4`.
 
-The baseline's earlier offline verification on 2026-11-07 used Python 3.12.3 / PyTorch 2.15.0+cpu,
+The following is historical validation of the separate complete common/logprob
+overlay, **not the test result of this only-extra experiment**. It used Python
+3.12.3 / PyTorch 2.15.0+cpu on 2026-11-07,
 with CUDA unavailable (not the pinned image's GPU environment):
 
 - Unmodified image consumer: 10 failing selected-token subcases, with the
