@@ -142,7 +142,11 @@ def pack(manifest, output):
     names += [
         f"runtime-overlay/sglang/{name}" for name in manifest["baseline_symlinks"]
     ]
-    names += ["tests/test_logprob_rows.py", "tests/test_overlay.py"]
+    names += [
+        "tests/test_logprob_rows.py",
+        "tests/test_overlay.py",
+        "tests/test_sm120_extra_slots.py",
+    ]
     # Exclusive create: never overwrite an earlier deployment artifact.
     with output.open("xb") as stream:
         with gzip.GzipFile(

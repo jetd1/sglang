@@ -1,10 +1,15 @@
 # DeepSeek V4.1 Flash deployment overlay
 
 This directory is the deployment source, independent of the repository's generic
-`python/` tree. Use the dedicated `deploy/deepseek-v4.1-flash-overlay` branch and
-pin an immutable commit when packaging. Do **not** `pip install` this checkout,
-put its generic `python/` on the serving `PYTHONPATH`, or use an older DeepSeek
-branch as a replacement for this runtime.
+`python/` tree. This revision is an **offline sm120 candidate**, based on the
+validated `deploy/deepseek-v4.1-flash-overlay` baseline commit
+`dd3618209ea01705d07f36ecf56b24a2f536743c`. Package the candidate from its own
+`odin/deepseek-sm120-extra-slots-fix-3` branch and pin an immutable commit;
+the shared deployment branch and production references have not been advanced.
+Four frozen single-GPU synthetic prefill cases satisfy their numerical criteria;
+isolated full-model/long-task gates remain unpassed. Do **not** `pip install`
+this checkout, put its generic `python/` on the serving `PYTHONPATH`,
+or use an older DeepSeek branch as a replacement for this runtime.
 
 ## Baseline and contents
 
@@ -43,7 +48,7 @@ This is not a claim that the issue was never fixed before.
 | `srt/managers/scheduler_components/batch_result_processor.py` | Convert selected-token logprob rows only when they are Tensors, in both prefill and decode | Reuses the existing normalization convention and CPU regression from `c3e375fe6a8e7c5932f563a8ae81cdff030d548c`; all other consumer bytes retained |
 | `srt/function_call/function_call_parser.py` | Bound held streaming text, flush it and latch parsing off after the guard fires | Existing B300 v5 / PRO6K v6 parser guard, byte-identical between those captured deployments |
 | `srt/environ.py` | Declare `SGLANG_TOOL_CALL_BUFFER_LIMIT` | Existing guard, no upstream fields removed |
-| `profiles/sm120/kernels/ops/attention/flash_mla_sm120.py` | Extra-pool reblock, separate persistent-buffer key | Existing anchor-checked sm120 patch, unchanged behavior |
+| `profiles/sm120/kernels/ops/attention/flash_mla_sm120.py` | Extra-pool footer reblock and separate buffer; preserve token-slot indices and candidate counts | Inherited page-layout adaptation plus a minimal candidate correction: remove incorrect index expansion and length multiplication; no numerical/quality acceptance claimed |
 | `profiles/sm120-shim/srt/layers/attention/deepseek_v4_backend.py` | Strict decode-indexer metadata shim | Existing optional shim; only selected with explicit `--sm120-shim on` |
 
 There are exactly three changed regular files in the common tree. The remaining
@@ -52,7 +57,13 @@ replace the consumer, parser, or environment file.
 
 The logprob regression proves a consumer contract defect, not the identity of
 the live failing batch's list rows and **not** the cause or cure of PRO6K output
-quality differences. The inherited sm120 patches are not presented as new fixes.
+quality differences. The inherited decode-indexer shim is unchanged. The sm120
+candidate corrects a separate source/native token-slot/count contract, not the
+logprob defect: FlashInfer 0.6.18 consumes linear token slots and candidate counts,
+while footer reblocking preserves those units. Expanding a slot by the page
+split ratio or multiplying its length changes the gathered keys. The footer
+splitter and its independent extra buffer remain necessary and are retained.
+This changes only the sm120 profile; the complete common/B300 source is unchanged.
 
 ## Runtime compatibility and profiles
 
@@ -140,7 +151,7 @@ Run the focused regression against the complete common tree, with the pinned
 runtime's test dependencies or a separately recorded CPU environment:
 
 ```bash
-PYTHONPATH=runtime-overlay python3 -m pytest -q tests/test_logprob_rows.py tests/test_overlay.py
+PYTHONPATH=runtime-overlay python3 -m pytest -q tests/test_logprob_rows.py tests/test_overlay.py tests/test_sm120_extra_slots.py
 ```
 
 The selected-token regression uses the real producer, output object and both
@@ -149,7 +160,55 @@ materialized lists, order, selected-token indices and list-row identity. It
 fails on the unmodified image consumer. Installer tests cover fail-before-write,
 profile selection and full-bundle reproducibility/completeness.
 
-Offline verification on 2026-11-07 used Python 3.12.3 / PyTorch 2.15.0+cpu,
+The candidate's additional CPU regression executes the actual prefill adapter
+function from this profile with real torch index/length operations. Only the
+GPU page-copy and native attention boundary are replaced; it is not a handwritten
+translation of the index formula. PBS128/256, absent/present candidate lengths,
+negative padding and a final legal pool slot fail in four subcases before the
+minimal change and pass after it. It also checks the independent extra buffer key.
+Candidate deployment tests: 8 passed, 19 subtests passed. CPU boundary tests do
+not execute the splitter kernels or native attention. A first numerical probe
+attempt expired before usable container/output evidence, so its infrastructure
+failure supplies no GPU correctness result. A separately approved child process
+then completed the frozen four-case single-GPU numerical comparison described
+below. Full-model and long-task gates remain pending; no candidate server or
+production deployment is implied.
+
+Single-GPU synthetic validation on 2026-11-07 used the pinned image's PyTorch
+2.13.0+cu130 / CUDA13.0, FlashInfer0.6.18 and AOT binary SHA
+`a17d69ee8024686be65cbfcc22e0f01a35475ec1eb8cc04fe6bc8170ccd07764`.
+Q65/H8/D512, mainPBS128/topk128, extraPBS128 or256/topk512, negative padding,
+per-query lengths and absent/present attention sink were held fixed, with
+seed20261107 and atol=rtol0.05 declared before execution. All original and
+rewritten indices were allocation-safe. Each case called the original adapter
+and minimal candidate once, eight native calls total, with an independent
+FP32 reference dequantizing and gathering the original packed source pages.
+
+| Case | Candidate vs intended max abs | Original vs intended max abs | Original vs rewritten-input reference max abs |
+| --- | ---: | ---: | ---: |
+| PBS128 / no sink | 0.004896 | 0.765049 | 0.004430 |
+| PBS128 / sink | 0.002666 | 0.630166 | 0.001552 |
+| PBS256 / no sink | 0.007381 | 0.995464 | 0.004722 |
+| PBS256 / sink | 0.002713 | 0.850774 | 0.002841 |
+
+All candidate/intended and original/rewritten-reference elements satisfied the
+frozen tolerance; all four original/intended outputs failed it. The tested
+candidate prefill function AST matches this profile's function. Complete probe
+wall time was4.6113s, including its initialization and first kernel compilation;
+Torch allocator peak650657792B excludes driver/native allocations. Timing is
+not a benchmark: original/candidate call order and compilation history differ.
+The original service's process identity, health, zero request/queue gauges and
+all GPU memory readings were checked restored afterward. Its GPU was used by
+the probe and is not an untouched-scene control.
+
+This establishes the numerical token-slot/count mismatch and correction for
+these synthetic inputs, not that every CUDA path, distributed execution, real
+activation distribution or historical long-task quality issue is repaired.
+No CPU out-of-bounds fixture was sent to the GPU. Raw synthetic inputs, per-mode
+outputs and references were saved before advancing; result SHA256 is
+`247f172bafd80815b8fa50d719dd150e45a90fc1e12a53c9bfba5ae23ad625a4`.
+
+The baseline's earlier offline verification on 2026-11-07 used Python 3.12.3 / PyTorch 2.15.0+cpu,
 with CUDA unavailable (not the pinned image's GPU environment):
 
 - Unmodified image consumer: 10 failing selected-token subcases, with the

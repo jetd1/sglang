@@ -1,5 +1,5 @@
 {
-  "overlay_version": "2026-11-07.1",
+  "overlay_version": "2026-11-07.2-sm120-extra-slots-candidate",
   "runtime": {
     "image": "docker.io/lmsysorg/sglang@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82182cb618cc82b588816349",
     "accepted_image_digests": [
@@ -20,7 +20,7 @@
     "source": "Complete package file hashes recovered from the immutable source layer, not from a claimed git checkout.",
     "consumer_fix": "c3e375fe6a8e7c5932f563a8ae81cdff030d548c; Tensor-only normalization, adapted onto the image-matched consumer.",
     "guard_files": "Inherited parser/environ guard, byte-identical across B300 v5 and PRO6K v6 at capture; only guard additions relative to the pinned image.",
-    "sm120": "Existing extra-pool reblock and optional strict decode-indexer shim; no new kernel behavior or quality fix claimed."
+    "sm120": "Candidate based on dd3618209ea01705d07f36ecf56b24a2f536743c: preserve extra-pool footer reblock and independent buffer, remove incorrect token-slot expansion and candidate-length multiplication. Real-adapter CPU regression and four frozen single-GPU synthetic prefill cases verified; full-model and long-task validation still required. Optional strict decode-indexer shim unchanged."
   },
   "baseline_tree_sha256": "30734fcb37ec782e7c215ec79058dbd3c71a4a0c35ae214297db3f5c6bbc0779",
   "baseline_files": {
@@ -4778,7 +4778,7 @@
     "version.py": "b10f7d9ea276972352b1e9de0eb0bbb47d8ebe64c29469e15ea016a12019bb22"
   },
   "overlay_files": {
-    "profiles/sm120/kernels/ops/attention/flash_mla_sm120.py": "71cb4748eeaf558ac7a02528f91cab1b794b6e4250a176c700d3164782878d91",
+    "profiles/sm120/kernels/ops/attention/flash_mla_sm120.py": "61af1c10e673825336d39c4fcd2300fbd8472a54ad273b122cbf141da5233983",
     "profiles/sm120-shim/srt/layers/attention/deepseek_v4_backend.py": "7bb594df8ff09b23ef7053bf885625db4b71f84183388aba65a34180ed1f97fb"
   },
   "baseline_symlinks": {

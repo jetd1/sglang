@@ -159,6 +159,10 @@ class TestOverlayPackage(CustomTestCase):
                     self.assertTrue(member.issym())
                     self.assertEqual(member.linkname, target)
             packed = json.loads(contents["deepseek_v41/manifest.json"])
+            self.assertEqual(
+                contents["deepseek_v41/tests/test_sm120_extra_slots.py"],
+                (ROOT / "tests/test_sm120_extra_slots.py").read_bytes(),
+            )
             for name, digest in packed["overlay_files"].items():
                 self.assertEqual(
                     overlay.sha256(contents[f"deepseek_v41/{name}"]), digest

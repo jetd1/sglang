@@ -246,28 +246,15 @@ def _flash_mla_sm120_prefill(
         if extra_indices is not None and extra_indices.dim() == 3
         else extra_indices
     )
-    # [PRO6000 probe] sm120 dual-cache kernel instantiates extra_pbs in {64, 2}
-    # only; the dsv4.1 branch passes the c1/c2 pool at native 128/256. Re-block
-    # to 64 via the footer-rewrite splitter (own buffer key), remap block ids
-    # b -> [b*r .. b*r+r-1] preserving -1 skip entries, double per-token len.
+    # Native prefill requires extra_pbs in {64, 2}; split the footer layout
+    # while preserving token-slot indices and per-query candidate counts.
     if extra_kv_u8 is not None and extra_idx is not None:
         extra_src_pbs = extra_k_cache.shape[1] if extra_k_cache.ndim >= 2 else 64
         if extra_src_pbs % _PBS_DST == 0 and extra_src_pbs != _PBS_DST:
-            _ratio = extra_src_pbs // _PBS_DST
             extra_kv_u8 = _split_kv_pages_to_64(
                 extra_kv_u8, extra_src_pbs, touched_indices=None,
                 buf_key="flash_mla_sm120_split_extra",
             )
-            _valid = extra_idx >= 0
-            _b = torch.where(_valid, extra_idx, torch.zeros_like(extra_idx))
-            _ar = torch.arange(_ratio, device=extra_idx.device, dtype=extra_idx.dtype)
-            extra_idx = (_b.unsqueeze(-1) * _ratio + _ar).flatten(-2)
-            _vrep = _valid.unsqueeze(-1).expand(-1, -1, _ratio).flatten(-2)
-            extra_idx = torch.where(
-                _vrep, extra_idx, torch.full_like(extra_idx, -1),
-            )
-            if extra_topk_length is not None:
-                extra_topk_length = extra_topk_length * 2
     output = q2.new_empty((num_tokens, num_heads, head_dim_v), dtype=torch.bfloat16)
     out_lse = torch.empty((num_tokens, num_heads), dtype=torch.float32, device=dev)
     _sparse_mla_sm120_paged_attention(
