@@ -1,13 +1,18 @@
 # DeepSeek V4.1 Flash deployment overlay
 
 This directory is the deployment source, independent of the repository's generic
-`python/` tree. This revision is an **offline sm120 candidate**, based on the
+`python/` tree. This revision is an **experimental sm120 candidate**, based on the
 validated `deploy/deepseek-v4.1-flash-overlay` baseline commit
 `dd3618209ea01705d07f36ecf56b24a2f536743c`. Package the candidate from its own
 `odin/deepseek-sm120-extra-slots-fix-3` branch and pin an immutable commit;
 the shared deployment branch and production references have not been advanced.
-Four frozen single-GPU synthetic prefill cases satisfy their numerical criteria;
-isolated full-model/long-task gates remain unpassed. Do **not** `pip install`
+Four frozen single-GPU synthetic prefill cases satisfy their numerical criteria.
+A subsequent isolated full-model original-ABC round on immutable commit
+`04d1bda93308b4aeb6d0c625033f650da6b3be16` was transport-complete but scored
+2 reasonable next actions / 1 unreasonable output. Long-task quality acceptance
+remains **unpassed**; the numerical contract fix is not a complete semantic fix.
+This documentation follow-up does not change the tested runtime/profile bytes.
+Do **not** `pip install`
 this checkout, put its generic `python/` on the serving `PYTHONPATH`,
 or use an older DeepSeek branch as a replacement for this runtime.
 
@@ -48,7 +53,7 @@ This is not a claim that the issue was never fixed before.
 | `srt/managers/scheduler_components/batch_result_processor.py` | Convert selected-token logprob rows only when they are Tensors, in both prefill and decode | Reuses the existing normalization convention and CPU regression from `c3e375fe6a8e7c5932f563a8ae81cdff030d548c`; all other consumer bytes retained |
 | `srt/function_call/function_call_parser.py` | Bound held streaming text, flush it and latch parsing off after the guard fires | Existing B300 v5 / PRO6K v6 parser guard, byte-identical between those captured deployments |
 | `srt/environ.py` | Declare `SGLANG_TOOL_CALL_BUFFER_LIMIT` | Existing guard, no upstream fields removed |
-| `profiles/sm120/kernels/ops/attention/flash_mla_sm120.py` | Extra-pool footer reblock and separate buffer; preserve token-slot indices and candidate counts | Inherited page-layout adaptation plus a minimal candidate correction: remove incorrect index expansion and length multiplication; no numerical/quality acceptance claimed |
+| `profiles/sm120/kernels/ops/attention/flash_mla_sm120.py` | Extra-pool footer reblock and separate buffer; preserve token-slot indices and candidate counts | Inherited page-layout adaptation plus a minimal candidate correction: remove incorrect index expansion and length multiplication; synthetic numerical criteria pass, full long-task quality acceptance does not |
 | `profiles/sm120-shim/srt/layers/attention/deepseek_v4_backend.py` | Strict decode-indexer metadata shim | Existing optional shim; only selected with explicit `--sm120-shim on` |
 
 There are exactly three changed regular files in the common tree. The remaining
@@ -171,8 +176,10 @@ not execute the splitter kernels or native attention. A first numerical probe
 attempt expired before usable container/output evidence, so its infrastructure
 failure supplies no GPU correctness result. A separately approved child process
 then completed the frozen four-case single-GPU numerical comparison described
-below. Full-model and long-task gates remain pending; no candidate server or
-production deployment is implied.
+below. A later isolated candidate server passed full-source/default-FlashInfer
+and original-minimal admission and completed one original ABC round; the
+long-task semantic gate still failed as described below. No production
+promotion is implied.
 
 Single-GPU synthetic validation on 2026-11-07 used the pinned image's PyTorch
 2.13.0+cu130 / CUDA13.0, FlashInfer0.6.18 and AOT binary SHA
@@ -207,6 +214,38 @@ activation distribution or historical long-task quality issue is repaired.
 No CPU out-of-bounds fixture was sent to the GPU. Raw synthetic inputs, per-mode
 outputs and references were saved before advancing; result SHA256 is
 `247f172bafd80815b8fa50d719dd150e45a90fc1e12a53c9bfba5ae23ad625a4`.
+
+## Separate full-model observation, not quality acceptance
+
+On 2026-11-07, one isolated SM120 server using immutable candidate commit
+`04d1bda93308b4aeb6d0c625033f650da6b3be16` completed one original A→B→C round.
+Actual whole-tree/profile/manifest verification, runtime image identity,
+shim-off/default-FlashInfer selection, original minimal flags and stable process
+identity passed before requests. DSPARK, HiCache/radix reuse, overlap and CUDA
+graphs were disabled; the existing FP4 indexer/MoE and model sampling defaults
+were retained. The original request fields were not overridden; only the
+necessary served-model mapping changed. No returned tool was executed.
+
+| Original sample | Input tokens | Output tokens | First-content / E2E seconds | Transport | Bounded visible-output review |
+| --- | ---: | ---: | --- | --- | --- |
+| A | 344839 | 125 | 96.035 / 112.026 | Complete, HTTP200/tool_use/message_stop | Reasonable, limited grounded self-authored report-title Edit |
+| B | 239726 | 2269 | 45.051 / 337.078 | Complete, HTTP200/tool_use/message_stop | Unreasonable: a relevant issue proposal contains two unsupported local factual claims |
+| C | 241763 | 432 | 45.294 / 101.237 | Complete, HTTP200/tool_use/message_stop | Reasonable, limited read-only migration/lock inspection proposal |
+
+The independent review used each original task's own history, factual evidence,
+scope and tool schema, not another platform or GPU correctness as gold. Hidden
+thinking was not used for scoring. Reasonable means a usable next action, not
+completed work. First-content may be a thinking/tool fragment, not visible prose;
+usage includes generated tokens beyond visible text. There was no retry,
+additional request, contemporaneous candidate-Triton comparison or statistical
+success-rate estimate. The complete numerical contract fix and the remaining
+semantic failure are separate findings. Details and round/budget boundaries are
+recorded in `jetd1/llm-deploy`; private payloads/outputs are not part of this repo.
+This documentation revision does not change the tested manifest/runtime/profile
+or advance the shared deployment branch. Keep the experiment pinned to its
+actual tested commit/bundle, not this branch's later documentation HEAD.
+
+## Baseline CPU validation history
 
 The baseline's earlier offline verification on 2026-11-07 used Python 3.12.3 / PyTorch 2.15.0+cpu,
 with CUDA unavailable (not the pinned image's GPU environment):
