@@ -50,9 +50,12 @@ class TestDsparkRequestBudget(CustomTestCase):
         layout_factory = NS(from_verify_lens=lambda **kw: NS(verify_lens_cpu=list(kw["verify_lens_cpu"]), verify_lens=torch.tensor(kw["verify_lens_cpu"]), graph_num_tokens=max(sum(kw["verify_lens_cpu"]), min(kw["grid"]))))
         planner_env = {"VerifyWindow": NS, "RaggedVerifyLayout": layout_factory, "assign_extend_cache_locs_func": lambda **kw: torch.arange(100, 100 + kw["batch_size"] * kw["draft_token_num"])}
         alloc = actual(PLANNER, "alloc_verify_window", **planner_env)
-        budgets = actual(PLANNER, "row_verify_budgets")
-        worker_env = {"DFlashDraftInputV2": DraftInput, "alloc_verify_window": alloc, "row_verify_budgets": budgets, "RaggedVerifyLayout": layout_factory, "InfoSegment": NS(DRAFT="draft", TARGET_VERIFY="target"), "get_parallel": lambda: NS(enable_dp_attention=False), "prepare_mamba_track_for_verify": lambda batch: None, "verify_logits_adjustments_are_noop": lambda info: True}
+        worker_env = {"DFlashDraftInputV2": DraftInput, "alloc_verify_window": alloc, "RaggedVerifyLayout": layout_factory, "InfoSegment": NS(DRAFT="draft", TARGET_VERIFY="target"), "get_parallel": lambda: NS(enable_dp_attention=False), "prepare_mamba_track_for_verify": lambda batch: None, "verify_logits_adjustments_are_noop": lambda info: True}
         names = {n.name for n in ast.walk(ast.parse(PLANNER.read_text())) if isinstance(n, ast.FunctionDef)}
+        if "row_verify_budgets" in names:
+            # Absent on the unmodified baseline; the full-width fast path then
+            # runs through the original alloc and worker without the budget.
+            worker_env["row_verify_budgets"] = actual(PLANNER, "row_verify_budgets")
         for name in ("request_verify_lens", "bound_request_verify_layout"):
             if name in names:
                 worker_env[name] = actual(PLANNER, name, **planner_env)
