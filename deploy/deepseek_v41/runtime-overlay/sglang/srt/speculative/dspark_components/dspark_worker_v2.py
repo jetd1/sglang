@@ -716,7 +716,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             block_pos_offsets=self._block_pos_offsets,
             model_runner=self.model_runner,
-            row_budgets=row_budgets,
         )
 
         sampling_info = batch.sampling_info

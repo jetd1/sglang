@@ -293,28 +293,22 @@ class TestDsparkRequestBudget(CustomTestCase):
     # --- draft window bounding (RED on 04d, stays green) ---
 
     def test_real_window_is_bounded_before_draft(self):
+        # Legal positions keep their original per-column values (04d behavior);
+        # only positions that actually cross the RoPE boundary clamp to the
+        # anchor position, and cache locs always keep the assigned per-column
+        # slots (no same-slot aliasing).
         for p, remaining in ((12, 1), (12, 3), (12, 6), (28, 1)):
             with self.subTest(p=p, remaining=remaining):
                 result = self.worker_probe([(p, remaining)], "draft")
                 window = result["window"]
                 self.assertTrue(bool((window.positions_2d < CONTEXT_LEN).all()), window.positions_2d)
-                if remaining < VERIFY_W:
-                    self.assertEqual(
-                        window.positions_2d[0, remaining:].tolist(),
-                        [p] * (VERIFY_W - remaining),
-                    )
-                    anchor_loc = window.verify_cache_loc_2d[0, 0].item()
-                    self.assertEqual(
-                        window.verify_cache_loc_2d[0, remaining:].tolist(),
-                        [anchor_loc] * (VERIFY_W - remaining),
-                    )
-                else:
-                    self.assertEqual(
-                        window.verify_cache_loc_2d.tolist(),
-                        [[100, 101, 102, 103, 104, 105]],
-                    )
-                # draft graph eligibility is a model-level property (B1); this
-                # CPU fixture does not claim to prove graph replay.
+                expected_positions = [p + k if p + k < CONTEXT_LEN else p for k in range(VERIFY_W)]
+                self.assertEqual(window.positions_2d[0].tolist(), expected_positions)
+                # Every column keeps its own assigned slot, budget or not.
+                self.assertEqual(
+                    window.verify_cache_loc_2d[0].tolist(),
+                    [100 + k for k in range(VERIFY_W)],
+                )
 
     # --- static full-width fast path must reach the real executor ---
 

@@ -864,8 +864,19 @@ def alloc_verify_window(
     verify_num_draft_tokens: int,
     block_pos_offsets: torch.Tensor,
     model_runner,
-    row_budgets: Optional[Sequence[int]] = None,
 ) -> VerifyWindow:
+    """Allocate the per-request verify window on the shared req_to_token table.
+
+    Preserves the 04d behavior everywhere it is legal: every column keeps its
+    own assigned cache slot (no same-slot aliasing, so a budget-capped step
+    cannot create same-address non-atomic write races in the draft KV), and
+    every column keeps its per-column position. Only positions that actually
+    cross the context boundary clamp to the anchor position -- the RoPE table
+    carries no speculative-lookahead headroom, so P+k >= context_len would
+    index out of bounds. Budget-only padding columns (legal positions past
+    the generation budget) are dropped downstream by the budget layout's
+    verify_lens/commit gates, not by rewriting their window values here.
+    """
     prefix_lens = batch.seq_lens
     verify_w = verify_num_draft_tokens
     positions_2d = prefix_lens.unsqueeze(1) + block_pos_offsets
@@ -879,23 +890,11 @@ def alloc_verify_window(
         device=device,
     )
     verify_cache_loc_2d = verify_cache_loc.view(bs, verify_w)
-    if row_budgets is not None and any(int(b) < verify_w for b in row_budgets):
-        # Capped rows: columns past the per-request budget replay the anchor
-        # column (position P, anchor slot), so the draft graph keeps its shape
-        # while every index stays inside the request's own window. Accepted
-        # tokens and committed KV stay gated by the budget layout's
-        # verify_lens / commit_lens downstream.
-        budget = torch.tensor(
-            [int(b) for b in row_budgets],
-            device=positions_2d.device,
-            dtype=positions_2d.dtype,
-        ).unsqueeze(1)
-        live = block_pos_offsets.view(1, -1) < budget
-        positions_2d = torch.where(live, positions_2d, positions_2d[:, :1])
-        verify_cache_loc_2d = torch.where(
-            live, verify_cache_loc_2d, verify_cache_loc_2d[:, :1]
+    context_len = model_runner.model_config.context_len
+    if context_len is not None:
+        positions_2d = torch.where(
+            positions_2d < context_len, positions_2d, prefix_lens.unsqueeze(1)
         )
-        verify_cache_loc = verify_cache_loc_2d.reshape(-1)
     return VerifyWindow(
         positions_2d=positions_2d,
         verify_cache_loc=verify_cache_loc,
