@@ -730,10 +730,18 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         if self.ragged_verify_mode and forward_batch.forward_mode.is_target_verify():
             return False
 
+        # A verify spec can pin its step to eager (DSPARK budget-capped rows);
+        # honor it here so ModelRunner._forward_raw's re-check cannot replay
+        # a full-width graph the prepare path already refused to preload.
+        spec_info = forward_batch.spec_info
+        if spec_info is not None and getattr(
+            spec_info, "verify_disallow_cuda_graph", False
+        ):
+            return False
+
         # Uniform-width replay invariant: the batch's actual per-request width
         # must match this runner's capture width; anything else falls back to
         # eager. (Unset widths pass: not every path fills the field yet.)
-        spec_info = forward_batch.spec_info
         if (
             spec_info is not None
             and spec_info.num_tokens_per_req > 0

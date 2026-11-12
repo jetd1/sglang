@@ -11,6 +11,7 @@ from sglang.kernels.ops.attention.dsv4.unified_kv_kernels.env_gate import (
 from sglang.kernels.ops.speculative.dspark.dspark_accept import (
     AcceptGreedy,
     AcceptSampling,
+    CapCorrectLen,
     FinalizeAcceptLens,
     SelectMixedAccept,
     SoftmaxTemp,
@@ -140,6 +141,13 @@ class TargetVerifyExecutor:
             correct_len = self._simulated_correct_len(
                 bs=bs, dtype=correct_len.dtype, device=correct_len.device
             )
+            if layout is not None:
+                # The simulated override must obey the same per-request budget
+                # cutoff as the real accept, or a simulate run commits past
+                # the request's remaining window.
+                correct_len, cap_trim_lens = CapCorrectLen.execute(
+                    correct_len=correct_len, verify_lens=layout.verify_lens
+                )
 
         site = (
             SpecTpSyncSite.DSPARK_ACCEPT_GREEDY
@@ -248,6 +256,7 @@ class TargetVerifyExecutor:
         verify_ids_2d: torch.Tensor,
         verify_window: VerifyWindow,
         sampling_info,
+        allow_cuda_graph: bool = True,
     ) -> TargetVerifyResult:
         verify_w = self.verify_num_draft_tokens
         positions_2d = verify_window.positions_2d
@@ -260,6 +269,7 @@ class TargetVerifyExecutor:
             custom_mask=None,
             capture_hidden_mode=CaptureHiddenMode.FULL,
             live_seq_lens_cpu=batch.seq_lens_cpu,
+            verify_disallow_cuda_graph=not allow_cuda_graph,
         )
         batch.out_cache_loc = verify_cache_loc
         seq_lens_cpu_backup = batch.seq_lens_cpu
@@ -376,6 +386,7 @@ class TargetVerifyExecutor:
             capture_hidden_mode=CaptureHiddenMode.FULL,
             ragged_verify_layout=layout,
             live_seq_lens_cpu=batch.seq_lens_cpu,
+            verify_disallow_cuda_graph=not allow_cuda_graph,
         )
         batch.out_cache_loc = ragged_window.verify_cache_loc
         seq_lens_cpu_backup = batch.seq_lens_cpu
@@ -396,6 +407,7 @@ class TargetVerifyExecutor:
             verify_input=verify_input,
             seq_lens_cpu_backup=seq_lens_cpu_backup,
             seq_lens_sum_backup=seq_lens_sum_backup,
+            allow_cuda_graph=allow_cuda_graph,
         )
 
     def run_compact(

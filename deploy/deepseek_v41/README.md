@@ -232,18 +232,27 @@ with CUDA unavailable (not the pinned image's GPU environment):
   (extra symlink not rejected) was reproduced, fixed and re-reviewed closed.
 
 The request-budget regression exercises the actual `alloc_verify_window`,
-`row_verify_budgets`, worker `_forward_decode`, `event_loop_overlap` and accept
-cap functions via AST loads from this tree. Boundary rows (remaining 1/3 of 6)
-fail before the fix with out-of-window positions `[P..P+5]` crossing the RoPE
-table and a full-width graph verify; after it, positions stay `< context_len`,
-padding columns replay the anchor column, the budget ragged layout verifies the
-live window only, and the overlap loop drains then filters finished rows before
-the final window while full-budget batches keep the unmodified fast path. All
-subtests were red on the unmodified source and green after the change
-(11 passed, 25 subtests in the whole suite). GPU parity, distributed runs,
-CUDA graph capture and production crash causality are **not** verified; the
-five historical PRO arms' `vectorized_gather` asserts remain unproven against
-this single root cause until a GPU-model gate runs.
+`row_verify_budgets`, worker `_forward_decode`, `event_loop_overlap`, accept
+cap, `run_non_compact`, `_run_ragged`, `_forward_prepared_verify`,
+`DFlashVerifyInput.prepare_for_verify`, decode-graph `can_run_graph` and
+`ModelRunner._forward_raw` functions; `ForwardBatch.init_new`, native model
+execution and the graph runners' capture buffers are the only seams. Boundary
+rows (remaining 1/3 of 6) fail before the fix with out-of-window positions
+`[P..P+5]` crossing the RoPE table; mixed budgets `[1,6]` exceed the
+single-row layout grid; the static fast path hits an undefined
+`allow_cuda_graph`; a disabled graph is still replayed by `_forward_raw`; and
+a simulated 6-accept commits past a 1-token budget. After the fix, positions
+stay `< context_len`, padding columns replay the anchor column, the budget
+ragged layout verifies the live window only (grid `bs*W`), the eager pin is
+threaded through every layer and honored by the graph runner, the overlap
+loop drains then filters finished rows, and full-budget batches keep the
+unmodified fast path. All subtests were red on the unmodified source and
+green after the change (19 passed, 26 subtests in the whole suite). GPU
+parity, distributed runs, CUDA graph capture and production crash causality
+are **not** verified; the five historical PRO arms' `vectorized_gather`
+asserts remain unproven against this single root cause until a GPU-model
+gate runs. The simulated-accept cutoff uses the real AcceptGreedy/Finalize/
+BuildOutTokens kernels on CPU.
 
 CPU tests do not validate CUDA D2H, kernel execution, GPU memory, distributed
 scheduling, DSPARK serving, long-input quality or native Messages end-to-end.

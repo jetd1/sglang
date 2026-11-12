@@ -49,6 +49,10 @@ class DFlashVerifyInput(SpecInput):
     # Committed/live lengths before the verify caller temporarily expands
     # batch.seq_lens_cpu to the target-attention KV lengths.
     live_seq_lens_cpu: Optional[torch.Tensor] = None
+    # Set when this verify step must stay eager (e.g. DSPARK budget-capped
+    # rows): the decode graph runner honors it in can_run_graph, so
+    # ModelRunner._forward_raw cannot re-enable a disabled graph.
+    verify_disallow_cuda_graph: bool = False
 
     def __post_init__(self):
         super().__init__(spec_input_type=SpecInputType.DFLASH_VERIFY)

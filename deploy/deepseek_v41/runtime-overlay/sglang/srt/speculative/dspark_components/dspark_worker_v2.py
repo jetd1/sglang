@@ -774,7 +774,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             layout = RaggedVerifyLayout.from_verify_lens(
                 verify_lens_cpu=row_budgets,
                 device=device,
-                grid=[int(self.verify_num_draft_tokens)],
+                grid=[bs * int(self.verify_num_draft_tokens)],
             )
         run_compact = self._verify_planner.should_run_compact(layout=layout)
         if row_budgets is not None:
