@@ -277,6 +277,7 @@ class TargetVerifyExecutor:
             verify_input=verify_input,
             seq_lens_cpu_backup=seq_lens_cpu_backup,
             seq_lens_sum_backup=seq_lens_sum_backup,
+            allow_cuda_graph=allow_cuda_graph,
         )
 
         if sampling_info is not None:
@@ -295,9 +296,10 @@ class TargetVerifyExecutor:
         verify_input: DFlashVerifyInput,
         seq_lens_cpu_backup,
         seq_lens_sum_backup,
+        allow_cuda_graph: bool = True,
     ) -> TargetVerifyResult:
         verify_forward_batch, _ = verify_input.prepare_for_verify(
-            batch, self.target_worker
+            batch, self.target_worker, allow_cuda_graph=allow_cuda_graph
         )
         batch.seq_lens_cpu = seq_lens_cpu_backup
         batch.seq_lens_sum = seq_lens_sum_backup
@@ -364,6 +366,7 @@ class TargetVerifyExecutor:
         layout: RaggedVerifyLayout,
         ragged_window: RaggedVerifyWindow,
         sampling_info,
+        allow_cuda_graph: bool = True,
     ) -> TargetVerifyResult:
         verify_input = DFlashVerifyInput(
             draft_token=ragged_window.verify_ids,
@@ -406,6 +409,7 @@ class TargetVerifyExecutor:
         device: str,
         sampling_info,
         inject_gate: bool = False,
+        allow_cuda_graph: bool = True,
     ) -> tuple[TargetVerifyResult, torch.Tensor]:
         ragged_window = BuildRaggedVerifyWindow.execute(
             batch=batch,
@@ -424,6 +428,7 @@ class TargetVerifyExecutor:
             layout=layout,
             ragged_window=ragged_window,
             sampling_info=sampling_info,
+            allow_cuda_graph=allow_cuda_graph,
         )
         logits_output = target_verify.logits_output
 

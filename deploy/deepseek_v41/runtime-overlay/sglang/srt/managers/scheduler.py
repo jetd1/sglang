@@ -1915,14 +1915,21 @@ class Scheduler(
             self.running_batch = plan.running_batch
             batch = plan.batch_to_run
             self.cur_batch_for_debug = batch
+            dspark_budget_sync = self._needs_dspark_budget_sync(batch)
             disable_overlap_for_batch = self.is_disable_overlap_for_batch(
                 batch, last_batch=self.last_batch
-            )
+            ) or dspark_budget_sync
 
             # If we do not need to overlap the current batch with the last batch,
             # we can process the last batch immediately.
             if disable_overlap_for_batch:
                 pop_and_process()
+                if dspark_budget_sync:
+                    # The prepared batch shares Req objects with the just-drained
+                    # result. Drop completed rows before another speculative read.
+                    batch.filter_batch()
+                    if batch.is_empty():
+                        batch = None
                 # Opportunistic flush at the disable_overlap sync boundary:
                 # forward_stream is idle (prev forward drained, next not launched),
                 # so `_flush`'s non-urgent guard compacts freely. Sync-free, best-effort.
@@ -1960,6 +1967,26 @@ class Scheduler(
 
             if envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY.get():
                 self.invariant_checker.self_check_during_busy()
+
+    def _needs_dspark_budget_sync(self, batch: Optional[ScheduleBatch]) -> bool:
+        if (
+            batch is None
+            or not batch.spec_algorithm.is_dspark()
+            or not batch.forward_mode.is_decode()
+            or not self.result_queue
+        ):
+            return False
+        width = (
+            get_spec().speculative_num_draft_tokens
+            or self.draft_worker.speculative_num_draft_tokens
+        )
+        # Host output counts can lag one full verify window. Drain before the
+        # final window, so zero-budget rows finish rather than verifying a bonus.
+        return any(
+            req.sampling_params.max_new_tokens is not None
+            and req.sampling_params.max_new_tokens - len(req.output_ids) <= 2 * width
+            for req in batch.reqs
+        )
 
     def is_disable_overlap_for_batch(
         self, batch: ScheduleBatch, last_batch: Optional[ScheduleBatch]

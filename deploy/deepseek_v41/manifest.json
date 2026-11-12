@@ -1,5 +1,5 @@
 {
-  "overlay_version": "2026-11-07.2-sm120-extra-slots-candidate",
+  "overlay_version": "2026-11-13.1-request-budget-candidate",
   "runtime": {
     "image": "docker.io/lmsysorg/sglang@sha256:3dbc313030a6ef2c5d7de8ecf48e9aece722694a82182cb618cc82b588816349",
     "accepted_image_digests": [
@@ -20,7 +20,8 @@
     "source": "Complete package file hashes recovered from the immutable source layer, not from a claimed git checkout.",
     "consumer_fix": "c3e375fe6a8e7c5932f563a8ae81cdff030d548c; Tensor-only normalization, adapted onto the image-matched consumer.",
     "guard_files": "Inherited parser/environ guard, byte-identical across B300 v5 and PRO6K v6 at capture; only guard additions relative to the pinned image.",
-    "sm120": "Candidate based on dd3618209ea01705d07f36ecf56b24a2f536743c: preserve extra-pool footer reblock and independent buffer, remove incorrect token-slot expansion and candidate-length multiplication. Real-adapter CPU regression and four frozen single-GPU synthetic prefill cases verified; full-model and long-task validation still required. Optional strict decode-indexer shim unchanged."
+    "sm120": "Candidate based on dd3618209ea01705d07f36ecf56b24a2f536743c: preserve extra-pool footer reblock and independent buffer, remove incorrect token-slot expansion and candidate-length multiplication. Real-adapter CPU regression and four frozen single-GPU synthetic prefill cases verified; full-model and long-task validation still required. Optional strict decode-indexer shim unchanged.",
+    "request_budget": "Candidate based on 04d1bda93308b4aeb6d0c625033f650da6b3be16: bound each DSPARK request's verify window by the last legal position (context_len - 1, no RoPE headroom) and remaining generation tokens before the draft runs; capped rows verify the live window through a budget ragged layout on the eager path (no full-width graph replay), padding columns replay the anchor column, and the overlap scheduler drains the pending result before a budget-limited window so finished rows are filtered instead of verifying a bonus token. Real-function CPU regressions (window allocation, worker forward, scheduler overlap loop, accept cap) verified; CUDA/GPU parity and full-model tests not yet run."
   },
   "baseline_tree_sha256": "30734fcb37ec782e7c215ec79058dbd3c71a4a0c35ae214297db3f5c6bbc0779",
   "baseline_files": {
@@ -8572,7 +8573,7 @@
     "srt/managers/prefill_delayer.py": "907356ee0a42e95b506560788c9da1a5bfaabac210a8ae04c96f2ed49f65dc81",
     "srt/managers/schedule_batch.py": "cf93e3a7a8fe99e13e217bb90ed61297799dcf5995b0800ab82e2e276a554c40",
     "srt/managers/schedule_policy.py": "0e45c0bd4648998fb9dbf3d903380521bd7911941ce96b501e89c1b395861d9d",
-    "srt/managers/scheduler.py": "a27879971d17033955847d79b2e6ebc5604da419fe6ffee43c5c107479ffc97e",
+    "srt/managers/scheduler.py": "968050961ff4f3744cb84ba89ea5dc12eb2ad1df5ed38bee042f8b250c1cc104",
     "srt/managers/scheduler_components/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "srt/managers/scheduler_components/batch_result_processor.py": "9bd6b43a27baef7d8a0096436fddea6c6839c637f0e8e52412720ffe7ebc31fc",
     "srt/managers/scheduler_components/dp_attn.py": "7b8f8adc737eba4f812018a944ee7642da8380521c22476fa5bae58002baf410",
@@ -9266,7 +9267,7 @@
     "srt/speculative/cpp_ngram/ngram_corpus.py": "bb3fef5b318f74bb8bde9eb8917ea01c222739c017bd2509bf2ecb7621cff605",
     "srt/speculative/decoupled_spec_io.py": "e4e0951b45d720538c26784b9dd05817f0a9e76d748cecb3efdf9a6d1acbdff5",
     "srt/speculative/dflash_disaggregation.py": "d371aec455fc3cfaf6382375ba5165dcb9b6428fd266ad9ab4ef9d80689f98f8",
-    "srt/speculative/dflash_info.py": "4ca8ceea9ef15ed7477fa3079520bdb2cf5e1cb401611243c5b2bc211bf23b43",
+    "srt/speculative/dflash_info.py": "425242ebe8d7d570ad02f77df68890043263c90cda9c31ad388d6305fe33cbda",
     "srt/speculative/dflash_info_v2.py": "c66fd2a9629c5f0f36ad4eca34f2910dc8e8af509fd8c6b2fa3fd2722f18004f",
     "srt/speculative/dflash_utils.py": "fb72a3a28d5ecb33d77c6cd6655cc5b4abc8086feba5fb879c44b98b5cbb8374",
     "srt/speculative/dflash_worker_v2.py": "e855d197b1564058e15ac0f6ab6a35d9106566dea6ffac53f375539c424d1ee7",
@@ -9279,11 +9280,11 @@
     "srt/speculative/dspark_components/dspark_draft_sampler.py": "e8611c6d98e2457ba5306b554d8123b8a35d7b97f170ea9430f42255c8f98732",
     "srt/speculative/dspark_components/dspark_kv_inject.py": "e69e8f879aabf565fd8540e225e69375a1c5c9627c809dd49809794b72cc15a8",
     "srt/speculative/dspark_components/dspark_observability.py": "f035502e6fc10cfd6d333eaddc688f9cda6f4b20cc294459a29468c8892c12fb",
-    "srt/speculative/dspark_components/dspark_planner.py": "db262fc76542e9cface63680040ee0250a04e0d309e2e9156bb0ab7dbc245263",
+    "srt/speculative/dspark_components/dspark_planner.py": "209a9ee53376da9c4a36b1bb7a5a88138f6f07f15e95e8e847aa2b1dcc41b586",
     "srt/speculative/dspark_components/dspark_sps.py": "5bc24190ddc91fad9fd42d723c939b3eb3b32df74d2c3f3e12d247665c424f28",
     "srt/speculative/dspark_components/dspark_sts.py": "49b0ebd5fdee14dcbb527b24d6d682d8c9e27de769e87552cbed1bc7942bd06a",
-    "srt/speculative/dspark_components/dspark_verify.py": "2ee03975f313ee6f5aacd92632d27daddf084e591758e588830563490f445db9",
-    "srt/speculative/dspark_components/dspark_worker_v2.py": "7361310ce8fb3643efa0ed6d98c3e31c291fb2e2a859d850d77bd6496106df4b",
+    "srt/speculative/dspark_components/dspark_verify.py": "da87bc5654feb201064268f9f4864e53f6cab19fd04a465d754fa51d48fda6a9",
+    "srt/speculative/dspark_components/dspark_worker_v2.py": "09b037c724055f3bb01d02e215bc61eec9ee911189adf46c85384d3eae674641",
     "srt/speculative/dspark_disaggregation.py": "6cc53a8024c65f3d05ed54d99d8307b74a80460f31df390bd0367da0ae80b64c",
     "srt/speculative/eagle_disaggregation.py": "0854c16b82f3abb8ba72ae9410747c2268bce596ff084abe1f81fcc99de4c1f5",
     "srt/speculative/eagle_draft_cuda_graph_runner.py": "46e027c65ec31b7956d7964cdf62870a9dc6b70c311ba6299c7d14fa1f2f8532",

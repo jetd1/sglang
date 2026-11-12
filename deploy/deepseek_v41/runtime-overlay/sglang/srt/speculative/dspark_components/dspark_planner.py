@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional, Union
+from typing import List, Optional, Sequence, Union
 
 import msgspec
 import torch
@@ -821,6 +821,41 @@ def ragged_layout_exceeds_captured_grid(
     return tier_tokens > capture_num_tokens[-1]
 
 
+def row_verify_budgets(
+    *,
+    batch: ScheduleBatch,
+    context_len: Optional[int],
+    verify_num_draft_tokens: int,
+) -> Optional[List[int]]:
+    """Per-request live verify width, or None when every row runs full-width.
+
+    A row's window is bounded by the last legal position (context_len - 1:
+    the RoPE table carries no speculative-lookahead headroom) and by the
+    request's remaining generation tokens. Capped rows keep the anchor/bonus
+    slot (width >= 1); padding columns replay the anchor column and the
+    budget layout's verify_lens / commit gates drop them, never accept them.
+    """
+    verify_w = int(verify_num_draft_tokens)
+    seq_lens_cpu = batch.seq_lens_cpu
+    budgets: List[int] = []
+    capped = False
+    for i, req in enumerate(batch.reqs):
+        if seq_lens_cpu is not None:
+            prefix_len = int(seq_lens_cpu[i])
+        else:
+            prefix_len = int(batch.seq_lens[i].item())
+        budget = verify_w
+        if context_len is not None and context_len - prefix_len < verify_w:
+            budget = max(1, context_len - prefix_len)
+        max_new = req.sampling_params.max_new_tokens
+        if max_new is not None and max_new - len(req.output_ids) < budget:
+            budget = max(1, max_new - len(req.output_ids))
+        if budget < verify_w:
+            capped = True
+        budgets.append(budget)
+    return budgets if capped else None
+
+
 def alloc_verify_window(
     *,
     batch: ScheduleBatch,
@@ -829,6 +864,7 @@ def alloc_verify_window(
     verify_num_draft_tokens: int,
     block_pos_offsets: torch.Tensor,
     model_runner,
+    row_budgets: Optional[Sequence[int]] = None,
 ) -> VerifyWindow:
     prefix_lens = batch.seq_lens
     verify_w = verify_num_draft_tokens
@@ -843,6 +879,23 @@ def alloc_verify_window(
         device=device,
     )
     verify_cache_loc_2d = verify_cache_loc.view(bs, verify_w)
+    if row_budgets is not None and any(int(b) < verify_w for b in row_budgets):
+        # Capped rows: columns past the per-request budget replay the anchor
+        # column (position P, anchor slot), so the draft graph keeps its shape
+        # while every index stays inside the request's own window. Accepted
+        # tokens and committed KV stay gated by the budget layout's
+        # verify_lens / commit_lens downstream.
+        budget = torch.tensor(
+            [int(b) for b in row_budgets],
+            device=positions_2d.device,
+            dtype=positions_2d.dtype,
+        ).unsqueeze(1)
+        live = block_pos_offsets.view(1, -1) < budget
+        positions_2d = torch.where(live, positions_2d, positions_2d[:, :1])
+        verify_cache_loc_2d = torch.where(
+            live, verify_cache_loc_2d, verify_cache_loc_2d[:, :1]
+        )
+        verify_cache_loc = verify_cache_loc_2d.reshape(-1)
     return VerifyWindow(
         positions_2d=positions_2d,
         verify_cache_loc=verify_cache_loc,

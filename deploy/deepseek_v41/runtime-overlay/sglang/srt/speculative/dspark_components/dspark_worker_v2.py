@@ -63,7 +63,9 @@ from sglang.srt.speculative.dspark_components.dspark_planner import (
     alloc_verify_window,
     dp_global_verify_tier_num_tokens,
     idle_ragged_layout,
+    row_verify_budgets,
 )
+from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     CommitInjectCtx,
     DsparkVerifyEpilogue,
@@ -702,6 +704,11 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._observers.begin_step()
 
         target_model = self.target_worker.model_runner.model
+        row_budgets = row_verify_budgets(
+            batch=batch,
+            context_len=self.model_runner.model_config.context_len,
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
+        )
         verify_window = alloc_verify_window(
             batch=batch,
             bs=bs,
@@ -709,6 +716,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             block_pos_offsets=self._block_pos_offsets,
             model_runner=self.model_runner,
+            row_budgets=row_budgets,
         )
 
         sampling_info = batch.sampling_info
@@ -758,7 +766,19 @@ class DSparkWorkerV2(BaseSpecWorker):
             global_num_reqs=global_num_reqs,
             dp_tier_num_tokens=self._dp_verify_tier_num_tokens(batch),
         )
+        if layout is None and row_budgets is not None:
+            # Static mode schedules no per-request layout; give budget-capped
+            # rows a ragged layout so target verify runs the live window only
+            # (eager: no full-width graph replay whose padding columns would
+            # have to write outside the request's window).
+            layout = RaggedVerifyLayout.from_verify_lens(
+                verify_lens_cpu=row_budgets,
+                device=device,
+                grid=[int(self.verify_num_draft_tokens)],
+            )
         run_compact = self._verify_planner.should_run_compact(layout=layout)
+        if row_budgets is not None:
+            run_compact = True
 
         verify_ids_2d = torch.cat(
             [draft_block_ids[:, :1], draft_tokens], dim=1
@@ -781,6 +801,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             and verify_logits_adjustments_are_noop(sampling_info)
             and self._simulate_acc_len <= 0
             and not batch.has_grammar
+            and row_budgets is None
         )
         prepare_mamba_track_for_verify(batch)
         with self._observers.segment(InfoSegment.TARGET_VERIFY):
@@ -794,6 +815,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                     device=device,
                     sampling_info=sampling_info,
                     inject_gate=fold_eligible,
+                    allow_cuda_graph=row_budgets is None,
                 )
             else:
                 if (

@@ -1,15 +1,17 @@
 # DeepSeek V4.1 Flash deployment overlay
 
 This directory is the deployment source, independent of the repository's generic
-`python/` tree. This revision is an **offline sm120 candidate**, based on the
-validated `deploy/deepseek-v4.1-flash-overlay` baseline commit
-`dd3618209ea01705d07f36ecf56b24a2f536743c`. Package the candidate from its own
-`odin/deepseek-sm120-extra-slots-fix-3` branch and pin an immutable commit;
-the shared deployment branch and production references have not been advanced.
-Four frozen single-GPU synthetic prefill cases satisfy their numerical criteria;
-isolated full-model/long-task gates remain unpassed. Do **not** `pip install`
-this checkout, put its generic `python/` on the serving `PYTHONPATH`,
-or use an older DeepSeek branch as a replacement for this runtime.
+`python/` tree. This revision is an **offline sm120 + DSPARK request-budget
+candidate**, based on the validated `deploy/deepseek-v4.1-flash-overlay` baseline
+commit `dd3618209ea01705d07f36ecf56b24a2f536743c` and carried on the
+`04d1bda93308b4aeb6d0c625033f650da6b3be16` source tree. Package the candidate from
+its own worktree branch and pin an immutable commit; the shared deployment branch
+and production references have not been advanced. Four frozen single-GPU synthetic
+prefill cases satisfy their numerical criteria; the request-budget change has
+real-function CPU regressions only. Isolated full-model/long-task gates remain
+unpassed. Do **not** `pip install` this checkout, put its generic `python/` on
+the serving `PYTHONPATH`, or use an older DeepSeek branch as a replacement for
+this runtime.
 
 ## Baseline and contents
 
@@ -50,10 +52,15 @@ This is not a claim that the issue was never fixed before.
 | `srt/environ.py` | Declare `SGLANG_TOOL_CALL_BUFFER_LIMIT` | Existing guard, no upstream fields removed |
 | `profiles/sm120/kernels/ops/attention/flash_mla_sm120.py` | Extra-pool footer reblock and separate buffer; preserve token-slot indices and candidate counts | Inherited page-layout adaptation plus a minimal candidate correction: remove incorrect index expansion and length multiplication; no numerical/quality acceptance claimed |
 | `profiles/sm120-shim/srt/layers/attention/deepseek_v4_backend.py` | Strict decode-indexer metadata shim | Existing optional shim; only selected with explicit `--sm120-shim on` |
+| `srt/speculative/dspark_components/dspark_planner.py` | `row_verify_budgets` bounds each request's verify width by the last legal position and remaining generation tokens; capped rows' padding columns replay the anchor column | DSPARK request-budget candidate on `04d1bda9`; addresses the CPU-proved window/RoPE boundary (issue class #33454), GPU parity unverified |
+| `srt/speculative/dspark_components/dspark_worker_v2.py` | Budget-capped rows run the live window through a ragged layout on the eager path; folding is disabled for capped steps | Same candidate; no full-width graph replay for capped rows |
+| `srt/speculative/dspark_components/dspark_verify.py` / `srt/speculative/dflash_info.py` | `allow_cuda_graph` gates the target-verify graph on budget-capped steps | Same candidate; plumbing only |
+| `srt/managers/scheduler.py` | Overlap loop drains the pending result before a budget-limited window and filters finished rows, so zero-budget rows finish instead of verifying a bonus token | Same candidate; `_needs_dspark_budget_sync` engages only within `2 * draft_token_num` of a request's budget |
 
-There are exactly three changed regular files in the common tree. The remaining
-baseline package files are retained byte-for-byte. Profile overrides never
-replace the consumer, parser, or environment file.
+There are exactly eight changed regular files in the common tree (three baseline
+fixes plus five request-budget files). The remaining baseline package files are
+retained byte-for-byte. Profile overrides never replace the consumer, parser, or
+environment file.
 
 The logprob regression proves a consumer contract defect, not the identity of
 the live failing batch's list rows and **not** the cause or cure of PRO6K output
@@ -151,7 +158,7 @@ Run the focused regression against the complete common tree, with the pinned
 runtime's test dependencies or a separately recorded CPU environment:
 
 ```bash
-PYTHONPATH=runtime-overlay python3 -m pytest -q tests/test_logprob_rows.py tests/test_overlay.py tests/test_sm120_extra_slots.py
+PYTHONPATH=runtime-overlay python3 -m pytest -q tests/test_logprob_rows.py tests/test_overlay.py tests/test_sm120_extra_slots.py tests/test_dspark_request_budget.py
 ```
 
 The selected-token regression uses the real producer, output object and both
@@ -223,6 +230,20 @@ with CUDA unavailable (not the pinned image's GPU environment):
   in seven byte-identical image files; those bytes are intentionally retained.
 - Independent source/runtime and packaging reviews completed; one installer P2
   (extra symlink not rejected) was reproduced, fixed and re-reviewed closed.
+
+The request-budget regression exercises the actual `alloc_verify_window`,
+`row_verify_budgets`, worker `_forward_decode`, `event_loop_overlap` and accept
+cap functions via AST loads from this tree. Boundary rows (remaining 1/3 of 6)
+fail before the fix with out-of-window positions `[P..P+5]` crossing the RoPE
+table and a full-width graph verify; after it, positions stay `< context_len`,
+padding columns replay the anchor column, the budget ragged layout verifies the
+live window only, and the overlap loop drains then filters finished rows before
+the final window while full-budget batches keep the unmodified fast path. All
+subtests were red on the unmodified source and green after the change
+(11 passed, 25 subtests in the whole suite). GPU parity, distributed runs,
+CUDA graph capture and production crash causality are **not** verified; the
+five historical PRO arms' `vectorized_gather` asserts remain unproven against
+this single root cause until a GPU-model gate runs.
 
 CPU tests do not validate CUDA D2H, kernel execution, GPU memory, distributed
 scheduling, DSPARK serving, long-input quality or native Messages end-to-end.

@@ -146,6 +146,7 @@ def pack(manifest, output):
         "tests/test_logprob_rows.py",
         "tests/test_overlay.py",
         "tests/test_sm120_extra_slots.py",
+        "tests/test_dspark_request_budget.py",
     ]
     # Exclusive create: never overwrite an earlier deployment artifact.
     with output.open("xb") as stream:

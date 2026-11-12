@@ -60,6 +60,7 @@ class DFlashVerifyInput(SpecInput):
         self,
         batch: ScheduleBatch,
         target_worker: TpModelWorker,
+        allow_cuda_graph: bool = True,
     ) -> tuple[ForwardBatch, bool]:
         """Prepare a DFLASH verify forward batch for overlap scheduling.
 
@@ -101,7 +102,7 @@ class DFlashVerifyInput(SpecInput):
             return_hidden_states_before_norm=False,
         )
 
-        can_run_cuda_graph = bool(
+        can_run_cuda_graph = allow_cuda_graph and bool(
             target_worker.model_runner.decode_cuda_graph_runner
             and target_worker.model_runner.decode_cuda_graph_runner.can_run_graph(
                 verify_forward_batch
