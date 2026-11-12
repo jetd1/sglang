@@ -442,6 +442,68 @@ class TestDsparkRequestBudget(CustomTestCase):
         fb_capped = self.make_forward_batch(capped_spec, trace)
         self.assertFalse(runner.can_run_graph(fb_capped))
 
+    def test_ragged_mode_cannot_bypass_verify_disallow_flag(self):
+        # Compact-mode support face: the ragged early-return in can_run_graph
+        # must not answer before the disallow flag is checked.
+        from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
+
+        can_run = actual(
+            RUNNER,
+            "can_run_graph",
+            resolve_ragged_verify_layout=lambda forward_batch: getattr(
+                forward_batch.spec_info, "ragged_verify_layout", None
+            ),
+        )
+        can_ragged = actual(RUNNER, "_can_run_ragged_verify_graph")
+
+        def make_ragged_runner():
+            return NS(
+                ragged_verify_mode=True,
+                captured_req_width=VERIFY_W,
+                require_mlp_tp_gather=False,
+                require_mlp_sync=False,
+                max_bs=32,
+                disable_padding=False,
+                is_encoder_decoder=False,
+                enable_two_batch_overlap=False,
+                enable_pdmux=False,
+                model_runner=NS(spec_algorithm=NS(is_ngram=lambda: False)),
+                attn_backend=NS(supports_ragged_verify_graph=True),
+                capture_num_tokens=[VERIFY_W, 2 * VERIFY_W],
+                capture_hidden_mode=CaptureHiddenMode.FULL,
+                backend=NS(),
+                _make_graph_key=lambda bs, **kw: ("key", bs),
+                _resolve_lora_variant=lambda fb: None,
+                _ragged_capture_slots=lambda admission_tokens: 2,
+            )
+
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[1, 6],
+            device=torch.device("cpu"),
+            grid=[2 * VERIFY_W],
+        )
+        plain_spec = NS(
+            verify_disallow_cuda_graph=False,
+            ragged_verify_layout=layout,
+            num_tokens_per_req=VERIFY_W,
+        )
+        disallowed_spec = NS(
+            verify_disallow_cuda_graph=True,
+            ragged_verify_layout=layout,
+            num_tokens_per_req=VERIFY_W,
+        )
+        runner = make_ragged_runner()
+        runner.can_run_graph = MethodType(can_run, runner)
+        runner._can_run_ragged_verify_graph = MethodType(can_ragged, runner)
+
+        def fb_for(spec_info):
+            return self.make_forward_batch(spec_info, [])
+
+        # Without the flag the ragged path admits the layout (fixture control).
+        self.assertTrue(runner.can_run_graph(fb_for(plain_spec)))
+        # With the flag the ragged early-return must not answer around it.
+        self.assertFalse(runner.can_run_graph(fb_for(disallowed_spec)))
+
     # --- ModelRunner._forward_raw must not re-enable a disabled graph ---
 
     def test_forward_raw_respects_verify_disallow_flag(self):
