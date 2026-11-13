@@ -308,25 +308,25 @@ class TargetVerifyExecutor:
         seq_lens_sum_backup,
         allow_cuda_graph: bool = True,
     ) -> TargetVerifyResult:
-        verify_forward_batch, _ = verify_input.prepare_for_verify(
+        verify_forward_batch, can_run_cuda_graph = verify_input.prepare_for_verify(
             batch, self.target_worker, allow_cuda_graph=allow_cuda_graph
         )
         batch.seq_lens_cpu = seq_lens_cpu_backup
         batch.seq_lens_sum = seq_lens_sum_backup
 
-        if verify_forward_batch.mm_inputs is not None and any(
-            item is not None for item in verify_forward_batch.mm_inputs
+        if (
+            not can_run_cuda_graph
+            and verify_forward_batch.mm_inputs is not None
+            and any(item is not None for item in verify_forward_batch.mm_inputs)
         ):
-            # TARGET_VERIFY init_new skips extend metadata, but DeepSeek's eager
-            # MM embedding boundary still needs the actual continuation window.
-            # Use the live prefix, not stale prompt-prefill fields or the
-            # temporarily expanded attention KV lengths. Keep MM inputs intact.
-            if seq_lens_cpu_backup is None:
-                raise ValueError(
-                    "DSPARK multimodal verify requires live CPU prefix lengths"
-                )
+            # Only eager MM needs these host ranges; an admitted graph uses its
+            # capture buffers. DSPARK may drop the CPU mirror, so read the live
+            # device prefix when needed, never the draft's reserved KV length.
+            # That fallback adds a D2H sync only for eager MM without a mirror.
             verify_forward_batch.extend_prefix_lens_cpu = (
                 seq_lens_cpu_backup.tolist()
+                if seq_lens_cpu_backup is not None
+                else batch.seq_lens.cpu().tolist()
             )
             layout = verify_input.ragged_verify_layout
             if layout is None:

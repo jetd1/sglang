@@ -537,9 +537,10 @@ class TestDsparkRequestBudget(CustomTestCase):
         self.assertEqual(trace, ["prepare_eager"], f"graph replayed despite disallow flag: {trace}")
 
     def test_real_verify_prepare_carries_mm_window_metadata(self):
-        # Real ScheduleBatch -> ForwardBatch construction and MM embed/count
-        # boundary; attention, weights, KV translation, Engram and distributed
-        # state are CPU stand-ins. Unlike the old seam, init_new is not replaced.
+        # Real constructors, FutureMap mirror removal, padded window factory,
+        # graph admission and MM embed/count. Native attention, graph execution,
+        # weights, KV lookup, Engram and distributed state remain CPU stand-ins.
+        from sglang.kernels.ops.speculative.dspark import dspark_verify_window as win
         from sglang.srt.managers.mm_utils import embed_mm_inputs
         from sglang.srt.managers.schedule_batch import (
             Modality,
@@ -558,9 +559,40 @@ class TestDsparkRequestBudget(CustomTestCase):
             embed_mm_inputs=embed_mm_inputs,
             MultimodalInputs=MultimodalInputs,
         )
-        for widths, ragged in (([1], True), ([3], True), ([6], True), ([1, 6], True), ([6], False)):
-            with self.subTest(widths=widths, ragged=ragged):
-                prefixes = torch.tensor([12 + 8 * i for i in range(len(widths))])
+        resolve = actual(
+            ROOT / "managers/overlap_utils.py",
+            "resolve_seq_lens_cpu",
+            _DEBUG_ASSERT=False,
+            _is_hip=False,
+        )
+
+        def cache_lookup(**kw):
+            return torch.cat([
+                kw["req_to_token"][r, p:e]
+                for r, p, e in zip(
+                    kw["req_pool_indices"].tolist(),
+                    kw["start_offset"].tolist(),
+                    kw["end_offset"].tolist(),
+                )
+            ])
+
+        cases = (
+            ([1], True, True, False, True),
+            ([3], True, True, False, True),
+            ([1, 6], True, True, False, True),
+            ([6, 1], True, True, False, True),
+            ([6], False, True, False, True),
+            ([6], False, False, True, True),
+            ([6], False, False, True, False),
+            ([1], True, False, False, True),
+            ([6, 1], True, False, False, True),
+            ([6], False, False, False, True),
+            ([1], True, False, False, False),
+        )
+        for widths, ragged, mirror, graph, mm_present in cases:
+            with self.subTest(widths=widths, ragged=ragged, mirror=mirror, graph=graph, mm=mm_present):
+                bs = len(widths)
+                prefixes = torch.tensor([12 + 8 * i for i in range(bs)])
                 image = MultimodalDataItem(
                     modality=Modality.IMAGE,
                     pad_value=200,
@@ -569,17 +601,24 @@ class TestDsparkRequestBudget(CustomTestCase):
                 )
                 mm = MultimodalInputs(mm_items=[image])
                 batch = ScheduleBatch(
-                    reqs=[NS(rid=str(i), lora_id=None, token_type_ids=None) for i in range(len(widths))],
+                    reqs=[NS(rid=str(i), lora_id=None, token_type_ids=None) for i in range(bs)],
                     device="cpu",
                     forward_mode=ForwardMode.DECODE,
-                    input_ids=torch.zeros(len(widths), dtype=torch.int64),
-                    req_pool_indices=torch.arange(len(widths)),
+                    input_ids=torch.zeros(bs, dtype=torch.int64),
+                    req_pool_indices=torch.arange(bs),
                     seq_lens=prefixes.clone(),
                     seq_lens_cpu=prefixes.clone(),
                     seq_lens_sum=int(prefixes.sum()),
                     orig_seq_lens=prefixes.clone(),
-                    multimodal_inputs=[mm] + [None] * (len(widths) - 1),
+                    multimodal_inputs=[None] * (bs - 1) + [mm] if mm_present else None,
                 )
+                if not mirror:
+                    batch.spec_info = NS(future_indices=torch.arange(bs))
+                    resolve(NS(publish_ready=None, needs_cpu_seq_lens=False, new_seq_lens_buf=prefixes.clone()), batch)
+                    self.assertIsNone(batch.seq_lens_cpu)
+                    self.assertTrue(torch.equal(batch.seq_lens, prefixes))
+                trace = []
+                graph_runner = self.make_runner(trace) if graph else None
                 embed_tokens = torch.nn.Embedding(256, 2)
                 model = NS(
                     get_input_embeddings=lambda: embed_tokens,
@@ -592,20 +631,23 @@ class TestDsparkRequestBudget(CustomTestCase):
                     ngram_embedding_manager=NS(enabled=False),
                     lora_manager=None,
                     model_config=NS(model_is_mrope=False),
-                    decode_cuda_graph_runner=None,
+                    decode_cuda_graph_runner=graph_runner,
                     attn_backend=NS(
                         init_forward_metadata=lambda fb: None,
                         make_forward_metadata_from_raw_verify=lambda *args: None,
                     ),
+                    req_to_token_pool=NS(req_to_token=torch.arange(bs * 64).view(bs, 64)),
                 )
                 seen = []
 
                 def forward(**kw):
                     fb = kw["forward_batch"]
                     seen.append(fb)
-                    embeds = prepare_mm(model, fb.input_ids, fb)
-                    self.assertTrue(torch.equal(embeds, embed_tokens(fb.input_ids)))
-                    return NS(logits_output=NS(next_token_logits=torch.zeros(sum(widths), 2)), can_run_cuda_graph=False)
+                    if not graph and mm_present:
+                        embeds = prepare_mm(model, fb.input_ids, fb)
+                        self.assertTrue(torch.equal(embeds, embed_tokens(fb.input_ids)))
+                    trace.append("target_forward_boundary")
+                    return NS(logits_output=NS(next_token_logits=torch.zeros(len(fb.input_ids), 2)), can_run_cuda_graph=graph)
 
                 target = NS(model_runner=runner, forward_batch_generation=forward)
                 executor = TargetVerifyExecutor(
@@ -619,16 +661,33 @@ class TestDsparkRequestBudget(CustomTestCase):
                 layout = RaggedVerifyLayout.from_verify_lens(
                     verify_lens_cpu=widths,
                     device=torch.device("cpu"),
-                    grid=[len(widths) * VERIFY_W],
+                    grid=[bs * VERIFY_W],
                 )
-                window = NS(
-                    verify_ids=torch.zeros(sum(widths), dtype=torch.int64),
-                    positions=torch.cat([torch.arange(p, p + w) for p, w in zip(prefixes.tolist(), widths)]),
-                    verify_cache_loc=torch.arange(sum(widths)),
-                )
+                with patch.object(win, "assign_extend_cache_locs_func", cache_lookup):
+                    window = win.BuildRaggedVerifyWindow.execute(
+                        batch=batch,
+                        layout=layout,
+                        draft_block_ids=torch.ones(bs, VERIFY_W, dtype=torch.int64),
+                        draft_tokens=torch.full((bs, VERIFY_W - 1), 2, dtype=torch.int64),
+                        bs=bs,
+                        device="cpu",
+                        verify_num_draft_tokens=VERIFY_W,
+                        model_runner=runner,
+                    )
+                self.assertEqual(len(window.verify_ids), layout.graph_num_tokens)
+                self.assertTrue(bool(window.verify_ids[sum(widths):].eq(0).all()))
+                self.assertTrue(bool(window.positions[sum(widths):].eq(0).all()))
+                copies = []
+                original_cpu = torch.Tensor.cpu
+
+                def track_cpu(tensor, *args, **kw):
+                    copies.append(tensor)
+                    return original_cpu(tensor, *args, **kw)
+
                 with (
                     patch.object(spec_utils, "mamba_extra_buffer_enabled", return_value=False),
                     patch("sglang.srt.model_executor.forward_batch_info.get_parallel", return_value=NS(moe_ep_size=8)),
+                    patch.object(torch.Tensor, "cpu", track_cpu),
                 ):
                     if ragged:
                         executor._run_ragged(
@@ -641,20 +700,34 @@ class TestDsparkRequestBudget(CustomTestCase):
                     else:
                         executor.run_non_compact(
                             batch=batch,
-                            draft_input=NS(),
-                            verify_ids_2d=window.verify_ids.view(len(widths), VERIFY_W),
+                            draft_input=NS(nxt_kv_lens_cpu=None),
+                            verify_ids_2d=window.verify_ids.view(bs, VERIFY_W),
                             verify_window=NS(
-                                positions_2d=window.positions.view(len(widths), VERIFY_W),
+                                positions_2d=window.positions.view(bs, VERIFY_W),
                                 verify_cache_loc=window.verify_cache_loc,
                             ),
                             sampling_info=None,
-                            allow_cuda_graph=False,
+                            allow_cuda_graph=graph,
                         )
                 fb = seen[0]
-                self.assertEqual(fb.extend_prefix_lens_cpu, prefixes.tolist())
-                self.assertEqual(fb.extend_seq_lens_cpu, widths)
-                self.assertIs(fb.mm_inputs[0], mm)
-                self.assertTrue(torch.equal(batch.seq_lens_cpu, prefixes))
+                self.assertIn("target_forward_boundary", trace)
+                if graph:
+                    self.assertIn("load_graph", trace)
+                if not graph and mm_present:
+                    self.assertEqual(fb.extend_prefix_lens_cpu, prefixes.tolist())
+                    self.assertEqual(fb.extend_seq_lens_cpu, widths)
+                else:
+                    self.assertIsNone(fb.extend_prefix_lens_cpu)
+                    self.assertIsNone(fb.extend_seq_lens_cpu)
+                self.assertEqual(len(copies), int(not graph and mm_present and not mirror))
+                if copies:
+                    self.assertIs(copies[0], batch.seq_lens)
+                if mm_present:
+                    self.assertIs(fb.mm_inputs[-1], mm)
+                if mirror:
+                    self.assertTrue(torch.equal(batch.seq_lens_cpu, prefixes))
+                else:
+                    self.assertIsNone(batch.seq_lens_cpu)
 
     # --- accept cap contract for the budget layout (kept from the first suite) ---
 
