@@ -107,6 +107,7 @@ class TestDsparkRequestBudget(CustomTestCase):
     def make_forward_batch(self, spec_info, trace):
         fb = NS(
             replace_embeds=None,
+            mm_inputs=None,
             spec_info=spec_info,
             batch_size=2,
             input_ids=torch.zeros(2 * VERIFY_W),
@@ -534,6 +535,126 @@ class TestDsparkRequestBudget(CustomTestCase):
         with self.assertRaises(StopProbe):
             forward_raw(owner, fb, None)
         self.assertEqual(trace, ["prepare_eager"], f"graph replayed despite disallow flag: {trace}")
+
+    def test_real_verify_prepare_carries_mm_window_metadata(self):
+        # Real ScheduleBatch -> ForwardBatch construction and MM embed/count
+        # boundary; attention, weights, KV translation, Engram and distributed
+        # state are CPU stand-ins. Unlike the old seam, init_new is not replaced.
+        from sglang.srt.managers.mm_utils import embed_mm_inputs
+        from sglang.srt.managers.schedule_batch import (
+            Modality,
+            MultimodalDataItem,
+            MultimodalInputs,
+            ScheduleBatch,
+        )
+        from sglang.srt.model_executor.forward_batch_info import ForwardMode
+        from sglang.srt.speculative.dspark_components.dspark_verify import (
+            TargetVerifyExecutor,
+        )
+
+        prepare_mm = actual(
+            ROOT / "models/deepseek_v4.py",
+            "_prepare_mm_embeddings",
+            embed_mm_inputs=embed_mm_inputs,
+            MultimodalInputs=MultimodalInputs,
+        )
+        for widths, ragged in (([1], True), ([3], True), ([6], True), ([1, 6], True), ([6], False)):
+            with self.subTest(widths=widths, ragged=ragged):
+                prefixes = torch.tensor([12 + 8 * i for i in range(len(widths))])
+                image = MultimodalDataItem(
+                    modality=Modality.IMAGE,
+                    pad_value=200,
+                    offsets=[(2, 4)],
+                    feature=torch.ones(3, 2),
+                )
+                mm = MultimodalInputs(mm_items=[image])
+                batch = ScheduleBatch(
+                    reqs=[NS(rid=str(i), lora_id=None, token_type_ids=None) for i in range(len(widths))],
+                    device="cpu",
+                    forward_mode=ForwardMode.DECODE,
+                    input_ids=torch.zeros(len(widths), dtype=torch.int64),
+                    req_pool_indices=torch.arange(len(widths)),
+                    seq_lens=prefixes.clone(),
+                    seq_lens_cpu=prefixes.clone(),
+                    seq_lens_sum=int(prefixes.sum()),
+                    orig_seq_lens=prefixes.clone(),
+                    multimodal_inputs=[mm] + [None] * (len(widths) - 1),
+                )
+                embed_tokens = torch.nn.Embedding(256, 2)
+                model = NS(
+                    get_input_embeddings=lambda: embed_tokens,
+                    get_image_feature=lambda items: self.fail("cached prompt image was re-embedded"),
+                )
+                runner = NS(
+                    device="cpu",
+                    ps=NS(attn_dcp_size=1),
+                    kv_index_translator=NS(rebind_write_loc=lambda fb: None),
+                    ngram_embedding_manager=NS(enabled=False),
+                    lora_manager=None,
+                    model_config=NS(model_is_mrope=False),
+                    decode_cuda_graph_runner=None,
+                    attn_backend=NS(
+                        init_forward_metadata=lambda fb: None,
+                        make_forward_metadata_from_raw_verify=lambda *args: None,
+                    ),
+                )
+                seen = []
+
+                def forward(**kw):
+                    fb = kw["forward_batch"]
+                    seen.append(fb)
+                    embeds = prepare_mm(model, fb.input_ids, fb)
+                    self.assertTrue(torch.equal(embeds, embed_tokens(fb.input_ids)))
+                    return NS(logits_output=NS(next_token_logits=torch.zeros(sum(widths), 2)), can_run_cuda_graph=False)
+
+                target = NS(model_runner=runner, forward_batch_generation=forward)
+                executor = TargetVerifyExecutor(
+                    target_worker=target,
+                    gamma=VERIFY_W - 1,
+                    verify_num_draft_tokens=VERIFY_W,
+                    model_runner=runner,
+                    kv_injector=None,
+                    tp_sync=None,
+                )
+                layout = RaggedVerifyLayout.from_verify_lens(
+                    verify_lens_cpu=widths,
+                    device=torch.device("cpu"),
+                    grid=[len(widths) * VERIFY_W],
+                )
+                window = NS(
+                    verify_ids=torch.zeros(sum(widths), dtype=torch.int64),
+                    positions=torch.cat([torch.arange(p, p + w) for p, w in zip(prefixes.tolist(), widths)]),
+                    verify_cache_loc=torch.arange(sum(widths)),
+                )
+                with (
+                    patch.object(spec_utils, "mamba_extra_buffer_enabled", return_value=False),
+                    patch("sglang.srt.model_executor.forward_batch_info.get_parallel", return_value=NS(moe_ep_size=8)),
+                ):
+                    if ragged:
+                        executor._run_ragged(
+                            batch=batch,
+                            layout=layout,
+                            ragged_window=window,
+                            sampling_info=None,
+                            allow_cuda_graph=False,
+                        )
+                    else:
+                        executor.run_non_compact(
+                            batch=batch,
+                            draft_input=NS(),
+                            verify_ids_2d=window.verify_ids.view(len(widths), VERIFY_W),
+                            verify_window=NS(
+                                positions_2d=window.positions.view(len(widths), VERIFY_W),
+                                verify_cache_loc=window.verify_cache_loc,
+                            ),
+                            sampling_info=None,
+                            allow_cuda_graph=False,
+                        )
+                fb = seen[0]
+                self.assertEqual(fb.extend_prefix_lens_cpu, prefixes.tolist())
+                self.assertEqual(fb.extend_seq_lens_cpu, widths)
+                self.assertIs(fb.mm_inputs[0], mm)
+                self.assertTrue(torch.equal(batch.seq_lens_cpu, prefixes))
 
     # --- accept cap contract for the budget layout (kept from the first suite) ---
 

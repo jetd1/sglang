@@ -314,6 +314,31 @@ class TargetVerifyExecutor:
         batch.seq_lens_cpu = seq_lens_cpu_backup
         batch.seq_lens_sum = seq_lens_sum_backup
 
+        if verify_forward_batch.mm_inputs is not None and any(
+            item is not None for item in verify_forward_batch.mm_inputs
+        ):
+            # TARGET_VERIFY init_new skips extend metadata, but DeepSeek's eager
+            # MM embedding boundary still needs the actual continuation window.
+            # Use the live prefix, not stale prompt-prefill fields or the
+            # temporarily expanded attention KV lengths. Keep MM inputs intact.
+            if seq_lens_cpu_backup is None:
+                raise ValueError(
+                    "DSPARK multimodal verify requires live CPU prefix lengths"
+                )
+            verify_forward_batch.extend_prefix_lens_cpu = (
+                seq_lens_cpu_backup.tolist()
+            )
+            layout = verify_input.ragged_verify_layout
+            if layout is None:
+                verify_lens_cpu = (
+                    [self.verify_num_draft_tokens] * verify_forward_batch.batch_size
+                )
+            elif layout.verify_lens_cpu is not None:
+                verify_lens_cpu = list(layout.verify_lens_cpu)
+            else:
+                verify_lens_cpu = layout.verify_lens.cpu().tolist()
+            verify_forward_batch.extend_seq_lens_cpu = verify_lens_cpu
+
         target_out = self.target_worker.forward_batch_generation(
             batch=None,
             forward_batch=verify_forward_batch,
